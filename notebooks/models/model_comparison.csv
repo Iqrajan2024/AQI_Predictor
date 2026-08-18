@@ -1,0 +1,5 @@
+Model,MAE,RMSE,R²,Rank
+XGBoost,1.3132,2.4022,0.9943,1
+BiLSTM,2.4109,3.7394,0.9861,2
+Ridge Regression,2.7992,4.3062,0.9816,3
+Random Forest,2.6022,4.4868,0.98,4
