@@ -1,0 +1,55 @@
+name: Pearls AQI - CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+  pull_request:
+    branches:
+      - main
+      - master
+
+  workflow_dispatch:
+
+
+jobs:
+
+  test:
+    name: Test Feature Pipeline
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # --------------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # 2. Setup Python
+      # --------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # --------------------------------------------------------
+      # 3. Install dependencies
+      # --------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas
+          pip install pyarrow
+          pip install pytest
+
+      # --------------------------------------------------------
+      # 4. Run tests
+      # --------------------------------------------------------
+      - name: Run feature tests
+        run: |
+          pytest tests/test_features.py -v
