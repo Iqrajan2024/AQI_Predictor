@@ -18,10 +18,17 @@ data/raw/
 data/processed/
 
 # Model files
-models/*.pkl
-models/*.joblib
-models/*.keras
-models/*.h5
+models/
+notebooks/models/*.pkl
+notebooks/models/*.joblib
+notebooks/models/*.keras
+notebooks/models/*.h5
+
+# MLflow artifacts and local MLflow database
+mlartifacts/
+mlruns/
+model_registry/
+mlflow.db
 
 # OS files
 .DS_Store
