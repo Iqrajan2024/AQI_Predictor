@@ -35,4 +35,4 @@ mlflow.db
 Thumbs.db
 
 # VS Code
-.vscode/
+.vscode/.idea/

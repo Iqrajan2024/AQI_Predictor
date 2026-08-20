@@ -48,7 +48,14 @@ jobs:
           pip install pytest
 
       # --------------------------------------------------------
-      # 4. Run tests
+      # 4. Create CI test dataset
+      # --------------------------------------------------------
+      - name: Create CI test dataset
+        run: |
+          python tests/create_test_features.py
+
+      # --------------------------------------------------------
+      # 5. Run feature tests
       # --------------------------------------------------------
       - name: Run feature tests
         run: |
