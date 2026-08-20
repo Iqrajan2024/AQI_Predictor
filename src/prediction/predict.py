@@ -1,7 +1,7 @@
 """
 ============================================================
 PEARLS AQI PREDICTOR
-NEXT-HOUR PREDICTION PIPELINE
+72-HOUR PREDICTION PIPELINE
 ============================================================
 
 Loads the trained XGBoost champion model and predicts the
@@ -15,7 +15,8 @@ Input:
     Recent Open-Meteo weather + air-quality data
 
 Output:
-    Next-hour AQI prediction
+    Hourly AQI predictions for the next 72 hours
+    Daily average AQI values within the forecast window
 """
 
 from pathlib import Path
@@ -188,7 +189,7 @@ def print_header():
 
     print("=" * 60)
     print("PEARLS AQI PREDICTOR")
-    print("NEXT-HOUR PREDICTION PIPELINE")
+    print("72-HOUR PREDICTION PIPELINE")
     print("=" * 60)
 
     print(f"Project root: {PROJECT_ROOT}")
@@ -248,7 +249,7 @@ def fetch_weather():
         # Enough history for 72-hour features
         # plus future hours.
         "past_hours": 96,
-        "forecast_hours": 24,
+        "forecast_hours": 72,
 
         "timezone": "UTC",
 
@@ -314,7 +315,7 @@ def fetch_air_quality():
         ),
 
         "past_hours": 96,
-        "forecast_hours": 24,
+        "forecast_hours": 72,
 
         "timezone": "UTC",
     }
@@ -394,13 +395,13 @@ def merge_data(weather, air):
 # CREATE FEATURES
 # ============================================================
 
-def create_features(df):
+def create_features(df, verbose=True):
+    if verbose:
+        print("\n" + "=" * 60)
+        print("CREATING 70 MODEL FEATURES")
+        print("=" * 60)
 
-    print("\n" + "=" * 60)
-    print("CREATING 70 MODEL FEATURES")
-    print("=" * 60)
-
-    df = df.copy()
+        df = df.copy()
 
     # --------------------------------------------------------
     # TIME FEATURES
@@ -573,7 +574,8 @@ def create_features(df):
             + "\n".join(missing_features)
         )
 
-    print("✓ All 70 model features created")
+    if verbose:
+        print("✓ All 70 model features created")
 
     # --------------------------------------------------------
     # REMOVE ROWS WITHOUT FEATURES
@@ -589,75 +591,527 @@ def create_features(df):
             "No valid rows remain after feature creation."
         )
 
-    print(
-        "Rows available for prediction:",
-        len(valid_df),
-    )
+    if verbose:
+        print(
+            "Rows available for prediction:",
+            len(valid_df),
+        )
 
     return valid_df
 
-
 # ============================================================
-# PREDICT
+# RECURSIVE 72-HOUR PREDICTION
 # ============================================================
 
-def predict_next_hour(model, df):
+def predict_next_72_hours(model, df):
 
     print("\n" + "=" * 60)
-    print("GENERATING NEXT-HOUR AQI PREDICTION")
+    print("GENERATING 72-HOUR AQI FORECAST")
     print("=" * 60)
 
-    latest_row = (
+    working_df = (
         df
         .sort_values("timestamp")
-        .iloc[-1]
+        .drop_duplicates(
+            subset=["timestamp"],
+            keep="last",
+        )
+        .reset_index(drop=True)
+        .copy()
     )
 
-    X_latest = (
-        latest_row[FEATURE_COLUMNS]
-        .to_frame()
-        .T
+    if len(working_df) < 100:
+        raise ValueError(
+            "Not enough data returned by Open-Meteo."
+        )
+
+
+    # --------------------------------------------------------
+    # SPLIT HISTORY AND FUTURE
+    # --------------------------------------------------------
+    # Open-Meteo provides AQI forecasts for future timestamps too,
+    # so future us_aqi values can also be non-null.
+    # --------------------------------------------------------
+
+    HISTORY_HOURS = 96
+    FORECAST_HOURS = 72
+
+    total_rows = len(working_df)
+
+    expected_rows = (
+        HISTORY_HOURS
+        + FORECAST_HOURS
     )
 
-    # Make sure all values are numeric.
-    X_latest = X_latest.astype(float)
+    if total_rows < expected_rows:
+        raise ValueError(
+            f"Expected at least {expected_rows} rows "
+            f"from Open-Meteo, but received {total_rows}."
+        )
 
-    prediction = model.predict(
-        X_latest
-    )[0]
+    # --------------------------------------------------------
+    # TAKE THE LAST 168 HOURLY ROWS
+    # --------------------------------------------------------
 
-    prediction = max(
-        0.0,
-        float(prediction)
+    working_df = (
+        working_df
+        .sort_values("timestamp")
+        .reset_index(drop=True)
     )
 
-    latest_timestamp = latest_row["timestamp"]
+    # --------------------------------------------------------
+    # HISTORY
+    # --------------------------------------------------------
 
-    prediction_timestamp = (
-        latest_timestamp
-        + pd.Timedelta(hours=1)
+    history = (
+        working_df
+        .iloc[:HISTORY_HOURS]
+        .copy()
+        .reset_index(drop=True)
     )
+
+    # --------------------------------------------------------
+    # FUTURE FORECAST
+    # --------------------------------------------------------
+
+    future_df = (
+        working_df
+        .iloc[
+            HISTORY_HOURS:
+            HISTORY_HOURS + FORECAST_HOURS
+        ]
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # LATEST OBSERVED TIMESTAMP
+    # --------------------------------------------------------
+
+    latest_observed_timestamp = (
+        history["timestamp"].iloc[-1]
+    )
+
+    print(
+        "Latest observed time:",
+        latest_observed_timestamp,
+    )
+
+    print(
+        "Forecast start time:",
+        future_df["timestamp"].iloc[0],
+    )
+
+    print(
+        "Forecast end time:",
+        future_df["timestamp"].iloc[-1],
+    )
+
+    print(
+        "Historical rows:",
+        len(history),
+    )
+
+    print(
+        "Future forecast rows:",
+        len(future_df),
+    )
+
+    # --------------------------------------------------------
+    # VALIDATE FUTURE DATA
+    # --------------------------------------------------------
+
+    if len(future_df) != FORECAST_HOURS:
+        raise ValueError(
+            f"Expected {FORECAST_HOURS} future rows, "
+            f"but received {len(future_df)}."
+        )
+
+    
+    future_df = (
+        future_df
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    print(
+        "Future rows available:",
+        len(future_df),
+    )
+
+    if len(future_df) < 72:
+        raise ValueError(
+            f"Expected at least 72 future rows, "
+            f"but received {len(future_df)}."
+        )
+
+    # Keep exactly 72 hours.
+    future_df = future_df.iloc[:72].copy()
+
+    print(
+        "Forecast start time:",
+        future_df["timestamp"].iloc[0],
+    )
+
+    print(
+        "Forecast end time:",
+        future_df["timestamp"].iloc[-1],
+    )
+
+    # --------------------------------------------------------
+    # HISTORY
+    # --------------------------------------------------------
+    #
+    # Largest lag = 72 hours.
+    # Largest rolling window = 24 hours.
+    #
+    # Keep 96 hours so all features can be constructed.
+    # --------------------------------------------------------
+
+    history = (
+        working_df
+        .iloc[:HISTORY_HOURS]
+        .copy()
+        .reset_index(drop=True)
+    )
+
+    history = (
+        history
+        .sort_values("timestamp")
+        .tail(96)
+        .reset_index(drop=True)
+    )
+
+    if len(history) < 72:
+        raise ValueError(
+            "Not enough historical observations "
+            "for 72-hour lag features."
+        )
+
+    # --------------------------------------------------------
+    # RECURSIVE FORECAST
+    # --------------------------------------------------------
+
+    predictions = []
+
+    print("\nStarting recursive prediction...")
+
+    for step in range(72):
+
+        # ----------------------------------------------------
+        # FUTURE INPUT ROW
+        # ----------------------------------------------------
+        #
+        # This contains weather/pollutant forecasts for the
+        # hour we are going to predict.
+        # ----------------------------------------------------
+
+        future_row = (
+            future_df
+            .iloc[step]
+            .copy()
+        )
+
+        prediction_timestamp = (
+            future_row["timestamp"]
+        )
+
+        # ----------------------------------------------------
+        # IMPORTANT:
+        #
+        # The trained model predicts:
+        #
+        #     AQI(T+1) using features(T)
+        #
+        # Therefore the model input must be constructed from
+        # the CURRENT/ANCHOR observation immediately before
+        # the prediction timestamp.
+        #
+        # For the first prediction, this is the latest known
+        # observation.
+        #
+        # For later predictions, this is the previously
+        # predicted AQI/weather row.
+        # ----------------------------------------------------
+
+        anchor_timestamp = (
+            prediction_timestamp
+            - pd.Timedelta(hours=1)
+        )
+
+        # ----------------------------------------------------
+        # FIND ANCHOR ROW
+        # ----------------------------------------------------
+
+        anchor_rows = history[
+            history["timestamp"]
+            == anchor_timestamp
+        ]
+
+        if anchor_rows.empty:
+
+            raise ValueError(
+                f"Could not find anchor row for "
+                f"{prediction_timestamp}. "
+                f"Expected anchor timestamp: "
+                f"{anchor_timestamp}"
+            )
+
+        anchor_row = (
+            anchor_rows
+            .iloc[-1]
+            .copy()
+        )
+
+        # ----------------------------------------------------
+        # CREATE FEATURES USING ANCHOR ROW
+        # ----------------------------------------------------
+        #
+        # The anchor row contains a REAL AQI:
+        #
+        #   observed AQI for the first prediction
+        #   predicted AQI for subsequent predictions
+        #
+        # Therefore all 70 features can be calculated.
+        # ----------------------------------------------------
+
+        feature_source = history.copy()
+
+        feature_df = create_features(
+            feature_source,
+            verbose=False,
+        )
+
+        target_rows = feature_df[
+            feature_df["timestamp"]
+            == anchor_timestamp
+        ]
+
+        if target_rows.empty:
+
+            raise ValueError(
+                f"Could not create features for "
+                f"anchor timestamp "
+                f"{anchor_timestamp}"
+            )
+
+        target_row = (
+            target_rows
+            .iloc[-1]
+            .copy()
+        )
+
+        # ----------------------------------------------------
+        # MODEL INPUT
+        # ----------------------------------------------------
+
+        X = (
+            target_row[FEATURE_COLUMNS]
+            .to_frame()
+            .T
+            .astype(float)
+        )
+
+        # ----------------------------------------------------
+        # NaN CHECK
+        # ----------------------------------------------------
+
+        if X.isna().any().any():
+
+            missing_features = (
+                X.columns[
+                    X.isna().any()
+                ]
+                .tolist()
+            )
+
+            raise ValueError(
+                f"Missing features for anchor "
+                f"{anchor_timestamp}:\n"
+                + "\n".join(missing_features)
+            )
+
+        # ----------------------------------------------------
+        # PREDICT NEXT-HOUR AQI
+        # ----------------------------------------------------
+
+        predicted_aqi = model.predict(X)[0]
+
+        predicted_aqi = max(
+            0.0,
+            float(predicted_aqi),
+        )
+
+        # ----------------------------------------------------
+        # STORE PREDICTION
+        # ----------------------------------------------------
+
+        predictions.append(
+            {
+                "timestamp":
+                    prediction_timestamp,
+
+                "predicted_aqi":
+                    predicted_aqi,
+            }
+        )
+
+        # ----------------------------------------------------
+        # ADD PREDICTED AQI TO HISTORY
+        # ----------------------------------------------------
+        #
+        # The weather and pollutant values for the predicted
+        # hour come from Open-Meteo's forecast.
+        
+        predicted_row = pd.DataFrame(
+            [{
+                "timestamp":
+                    prediction_timestamp,
+
+                "temperature_2m":
+                    future_row["temperature_2m"],
+
+                "relative_humidity_2m":
+                    future_row["relative_humidity_2m"],
+
+                "pressure_msl":
+                    future_row["pressure_msl"],
+
+                "precipitation":
+                    future_row["precipitation"],
+
+                "wind_speed_10m":
+                    future_row["wind_speed_10m"],
+
+                "wind_direction_10m":
+                    future_row["wind_direction_10m"],
+
+                "pm2_5":
+                    future_row["pm2_5"],
+
+                "pm10":
+                    future_row["pm10"],
+
+                "carbon_monoxide":
+                    future_row["carbon_monoxide"],
+
+                "nitrogen_dioxide":
+                    future_row["nitrogen_dioxide"],
+
+                "sulphur_dioxide":
+                    future_row["sulphur_dioxide"],
+
+                "ozone":
+                    future_row["ozone"],
+
+                "us_aqi":
+                    predicted_aqi,
+            }]
+        )
+
+        history = pd.concat(
+            [
+                history,
+                predicted_row,
+            ],
+            ignore_index=True,
+        )
+
+        history = (
+            history
+            .sort_values("timestamp")
+            .tail(96)
+            .reset_index(drop=True)
+        )
+
+        # ----------------------------------------------------
+        # PROGRESS
+        # ----------------------------------------------------
+
+        if (
+            step < 3
+            or (step + 1) % 12 == 0
+            or step == 71
+        ):
+
+            print(
+                f"Hour {step + 1:02d}/72 | "
+                f"{prediction_timestamp} | "
+                f"AQI: {predicted_aqi:.2f}"
+            )
+
+    # ========================================================
+    # CREATE FORECAST DATAFRAME
+    # ========================================================
+
+    result_df = pd.DataFrame(
+        predictions
+    )
+
+    # ========================================================
+    # FORECAST DAY
+    # ========================================================
+
+    result_df["forecast_day"] = (
+        result_df["timestamp"].dt.date
+    )
+
+    # ========================================================
+    # DAILY AVERAGES
+    # ========================================================
+
+    daily_forecast = (
+        result_df
+        .groupby(
+            "forecast_day",
+            as_index=False,
+        )
+        .agg(
+            predicted_aqi=(
+                "predicted_aqi",
+                "mean",
+            )
+        )
+    )
+
+    # ========================================================
+    # HOURLY RESULTS
+    # ========================================================
 
     print("\n" + "=" * 60)
-    print("AQI PREDICTION")
+    print("72-HOUR AQI FORECAST")
     print("=" * 60)
 
     print(
-        "Latest data time :",
-        latest_timestamp,
+        result_df[
+            [
+                "timestamp",
+                "predicted_aqi",
+            ]
+        ].to_string(index=False)
     )
 
-    print(
-        "Prediction time  :",
-        prediction_timestamp,
-    )
+    # ========================================================
+    # DAILY RESULTS
+    # ========================================================
 
-    print(
-        f"Predicted AQI    : {prediction:.2f}"
-    )
+    print("\n" + "=" * 60)
+    print("DAILY AQI AVERAGES WITHIN 72-HOUR FORECAST")
+    print("=" * 60)
 
-    return prediction, prediction_timestamp
+    for _, row in daily_forecast.iterrows():
 
+        print(
+            f"{row['forecast_day']} | "
+            f"Average AQI: "
+            f"{row['predicted_aqi']:.2f}"
+        )
+
+    print("\n" + "=" * 60)
+    print("72-HOUR PREDICTION COMPLETED")
+    print("=" * 60)
+
+    return result_df, daily_forecast
 
 # ============================================================
 # MAIN
@@ -691,21 +1145,16 @@ def main():
     )
 
     # --------------------------------------------------------
-    # FEATURES
+    # 72-HOUR PREDICTION
+    #
+    # The prediction function creates the required 70 features
+    # recursively for each future hour.
     # --------------------------------------------------------
 
-    feature_df = create_features(
-        df
-    )
-
-    # --------------------------------------------------------
-    # PREDICT
-    # --------------------------------------------------------
-
-    prediction, prediction_time = (
-        predict_next_hour(
+    forecast_df, daily_forecast = (
+        predict_next_72_hours(
             model,
-            feature_df,
+            df,
         )
     )
 
@@ -717,15 +1166,17 @@ def main():
     print("PREDICTION PIPELINE COMPLETED")
     print("=" * 60)
 
-    print(
-        f"Next-hour AQI: {prediction:.2f}"
-    )
+    print("\nDaily AQI Averages Within 72-Hour Forecast:")
 
-    print(
-        f"Prediction timestamp: {prediction_time}"
-    )
+    for _, row in daily_forecast.iterrows():
 
-    print("\n✓ Prediction completed successfully")
+        print(
+            f"{row['forecast_day']} | "
+            f"Average AQI: "
+            f"{row['predicted_aqi']:.2f}"
+        )
+
+    print("\n✓ 72-hour prediction completed successfully")
 
 
 # ============================================================
