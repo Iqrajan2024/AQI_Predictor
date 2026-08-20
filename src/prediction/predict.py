@@ -39,7 +39,21 @@ MODEL_FILE = (
     / "models"
     / "champion_model.pkl"
 )
+PREDICTION_DIR = (
+    PROJECT_ROOT
+    / "data"
+    / "predictions"
+)
 
+HOURLY_PREDICTION_FILE = (
+    PREDICTION_DIR
+    / "latest_forecast.csv"
+)
+
+DAILY_PREDICTION_FILE = (
+    PREDICTION_DIR
+    / "latest_daily_forecast.csv"
+)
 
 # ============================================================
 # LOCATION
@@ -1114,6 +1128,96 @@ def predict_next_72_hours(model, df):
     return result_df, daily_forecast
 
 # ============================================================
+# SAVE PREDICTIONS
+# ============================================================
+
+def save_predictions(
+    forecast_df,
+    daily_forecast,
+):
+
+    print("\n" + "=" * 60)
+    print("SAVING PREDICTIONS")
+    print("=" * 60)
+
+    # --------------------------------------------------------
+    # CREATE OUTPUT DIRECTORY
+    # --------------------------------------------------------
+
+    PREDICTION_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    # --------------------------------------------------------
+    # SAVE HOURLY FORECAST
+    # --------------------------------------------------------
+
+    hourly_output = forecast_df[
+        [
+            "timestamp",
+            "predicted_aqi",
+        ]
+    ].copy()
+
+    hourly_output.to_csv(
+        HOURLY_PREDICTION_FILE,
+        index=False,
+    )
+
+    print(
+        "✓ Hourly forecast saved:"
+    )
+
+    print(
+        HOURLY_PREDICTION_FILE
+    )
+
+    # --------------------------------------------------------
+    # SAVE DAILY FORECAST
+    # --------------------------------------------------------
+
+    daily_output = daily_forecast[
+        [
+            "forecast_day",
+            "predicted_aqi",
+        ]
+    ].copy()
+
+    daily_output.to_csv(
+        DAILY_PREDICTION_FILE,
+        index=False,
+    )
+
+    print(
+        "✓ Daily forecast saved:"
+    )
+
+    print(
+        DAILY_PREDICTION_FILE
+    )
+
+    # --------------------------------------------------------
+    # VALIDATE OUTPUT
+    # --------------------------------------------------------
+
+    if not HOURLY_PREDICTION_FILE.exists():
+
+        raise FileNotFoundError(
+            "Hourly prediction file was not created."
+        )
+
+    if not DAILY_PREDICTION_FILE.exists():
+
+        raise FileNotFoundError(
+            "Daily prediction file was not created."
+        )
+
+    print(
+        "\n✓ Prediction artifacts saved successfully"
+    )
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1156,6 +1260,15 @@ def main():
             model,
             df,
         )
+    )
+
+    # --------------------------------------------------------
+    # SAVE PREDICTIONS
+    # --------------------------------------------------------
+
+    save_predictions(
+        forecast_df,
+        daily_forecast,
     )
 
     # --------------------------------------------------------

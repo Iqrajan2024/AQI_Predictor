@@ -36,3 +36,5 @@ Thumbs.db
 
 # VS Code
 .vscode/
+# Prediction outputs
+data/predictions/
