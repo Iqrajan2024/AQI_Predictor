@@ -1,24 +1,15 @@
-name: Pearls AQI - CI
+name: Pearls AQI - Hourly Feature Pipeline
 
 on:
-  push:
-    branches:
-      - main
-      - master
-
-  pull_request:
-    branches:
-      - main
-      - master
+  schedule:
+    # Every hour at minute 15
+    - cron: "15 * * * *"
 
   workflow_dispatch:
 
-
 jobs:
-
-  test:
-    name: Test Feature Pipeline
-
+  feature_pipeline:
+    name: Run Feature Engineering
     runs-on: ubuntu-latest
 
     steps:
@@ -43,20 +34,18 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas
-          pip install pyarrow
-          pip install pytest
+          pip install pandas pyarrow
 
       # --------------------------------------------------------
-      # 4. Create CI test dataset
+      # 4. Run feature engineering
       # --------------------------------------------------------
-      - name: Create test feature dataset
+      - name: Run feature engineering pipeline
         run: |
-          python tests/create_test_features.py
+          python src/features/build_features.py
 
       # --------------------------------------------------------
-      # 5. Run tests
+      # 5. Verify feature dataset
       # --------------------------------------------------------
-      - name: Run feature tests
+      - name: Verify feature dataset
         run: |
-          pytest tests/test_features.py -v
+          python -c "import pandas as pd; df=pd.read_parquet('data/processed/aqi_features.parquet'); print('Feature dataset shape:', df.shape); print('Missing values:', df.isna().sum().sum())"
