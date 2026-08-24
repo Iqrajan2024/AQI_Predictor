@@ -48,4 +48,4 @@ Thumbs.db
 data/predictions/
 
 # Feast local stores
-feature_repo/feature_repo/data/*.db
+feature_repo/feature_repo/data/*.dbmodels/random_forest_aqi.pkl
