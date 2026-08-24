@@ -87,6 +87,10 @@ DAILY_PREDICTION_FILE = (
     / "latest_daily_forecast.csv"
 )
 
+FEATURE_PREDICTION_FILE = (
+    PREDICTION_DIR
+    / "latest_forecast_features.csv"
+)
 
 # ============================================================
 # MLflow
@@ -1221,6 +1225,8 @@ def predict_forecast(
 
     predictions = []
 
+    prediction_features = []
+
     working_history = history.copy()
 
     for step in range(FORECAST_HOURS):
@@ -1295,6 +1301,16 @@ def predict_forecast(
         )
 
         X = X.astype(float)
+
+        # ----------------------------------------------------
+        # Save exact 70-feature vector used for this prediction
+        # ----------------------------------------------------
+
+        feature_record = X.iloc[0].to_dict()
+
+        feature_record["timestamp"] = prediction_timestamp
+
+        prediction_features.append(feature_record)
 
         # ----------------------------------------------------
         # Validate all 70 features.
@@ -1564,9 +1580,18 @@ def predict_forecast(
         )
     )
 
+    prediction_features_df = pd.DataFrame(
+        prediction_features
+    )
+
+    prediction_features_df = prediction_features_df[
+        ["timestamp"] + FEATURE_COLUMNS
+    ]
+
     return (
         forecast_df,
         daily_forecast,
+        prediction_features_df,
     )
 
 
@@ -1577,6 +1602,7 @@ def predict_forecast(
 def save_predictions(
     forecast_df,
     daily_forecast,
+    prediction_features_df,
 ):
 
     print("\n" + "=" * 70)
@@ -1637,6 +1663,24 @@ def save_predictions(
     )
 
     # --------------------------------------------------------
+    # Prediction feature context
+    # --------------------------------------------------------
+
+    prediction_features_df.to_csv(
+        FEATURE_PREDICTION_FILE,
+        index=False,
+    )
+
+    print(
+        "✓ Forecast feature context saved:"
+    )
+
+    print(
+        FEATURE_PREDICTION_FILE
+    )
+
+
+    # --------------------------------------------------------
     # Validate files
     # --------------------------------------------------------
 
@@ -1655,6 +1699,12 @@ def save_predictions(
     print(
         "\n✓ Prediction artifacts saved successfully"
     )
+
+    if not FEATURE_PREDICTION_FILE.exists():
+
+        raise FileNotFoundError(
+            "Forecast feature context file was not created."
+        )
 
 
 # ============================================================
@@ -1714,6 +1764,7 @@ def main():
     (
         forecast_df,
         daily_forecast,
+        prediction_features_df,
     ) = predict_forecast(
         model=model,
         feast_state=feast_state,
@@ -1727,6 +1778,7 @@ def main():
     save_predictions(
         forecast_df,
         daily_forecast,
+        prediction_features_df,
     )
 
     # --------------------------------------------------------
