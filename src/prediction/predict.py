@@ -723,17 +723,11 @@ def get_feast_state(
     print("READING LATEST STATE FROM FEAST")
     print("=" * 70)
 
-    entity_df = pd.DataFrame(
+    entity_rows = [
         {
-            "location_id": [
-                LOCATION_ID
-            ],
-
-            "event_timestamp": [
-                timestamp
-            ],
+            "location_id": LOCATION_ID
         }
-    )
+    ]
 
     print(
         "Entity:",
@@ -741,7 +735,7 @@ def get_feast_state(
     )
 
     print(
-        "Feature timestamp:",
+        "Reference timestamp:",
         timestamp
     )
 
@@ -754,9 +748,7 @@ def get_feast_state(
 
         result = store.get_online_features(
             features=feature_names,
-            entity_rows=entity_df.to_dict(
-                orient="records"
-            ),
+            entity_rows=entity_rows,
         ).to_dict()
 
     except Exception as exc:
@@ -777,8 +769,88 @@ def get_feast_state(
         len(feast_df.columns)
     )
 
-    return feast_df
+    # --------------------------------------------------------
+    # Validate entity
+    # --------------------------------------------------------
 
+    if "location_id" not in feast_df.columns:
+
+        raise ValueError(
+            "Feast response does not contain "
+            "'location_id'."
+        )
+
+    if feast_df.empty:
+
+        raise ValueError(
+            "Feast returned an empty online feature state."
+        )
+
+    # --------------------------------------------------------
+    # Validate all 70 model features
+    # --------------------------------------------------------
+
+    missing_features = [
+        feature
+        for feature in FEATURE_COLUMNS
+        if feature not in feast_df.columns
+    ]
+
+    if missing_features:
+
+        raise ValueError(
+            "Feast response is missing model features:\n"
+            + "\n".join(missing_features)
+        )
+
+    # --------------------------------------------------------
+    # Extract exactly the 70 model features
+    # --------------------------------------------------------
+
+    feature_state = (
+        feast_df[
+            FEATURE_COLUMNS
+        ]
+        .iloc[0]
+        .to_frame()
+        .T
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # Numeric conversion
+    # --------------------------------------------------------
+
+    feature_state = feature_state.astype(float)
+
+    # --------------------------------------------------------
+    # Missing-value validation
+    # --------------------------------------------------------
+
+    if feature_state.isna().any().any():
+
+        missing = (
+            feature_state.columns[
+                feature_state.isna().any()
+            ]
+            .tolist()
+        )
+
+        raise ValueError(
+            "Feast returned missing values for:\n"
+            + "\n".join(missing)
+        )
+
+    print(
+        "✓ Feast returned all 70 model features"
+    )
+
+    print(
+        "Feature vector shape:",
+        feature_state.shape
+    )
+
+    return feature_state
 
 # ============================================================
 # FEATURE ENGINEERING
@@ -1632,7 +1704,7 @@ def main():
 
     feast_state = get_feast_state(
         store,
-        api_df["timestamp"].min(),
+        api_df["timestamp"].max(),
     )
 
     # --------------------------------------------------------
