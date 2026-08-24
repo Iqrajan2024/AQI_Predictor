@@ -31,7 +31,6 @@ import streamlit as st
 
 st.set_page_config(
     page_title="Pearls AQI Predictor",
-    page_icon="🌫️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -101,253 +100,6 @@ st.markdown(
                 margin-top: 0.3rem;
             }
 
-            /* ============================================================
-            3-DAY FORECAST CARDS
-            ============================================================ */
-
-            .forecast-card {
-                width: 100%;
-                height: 430px;
-                min-height: 430px;
-                box-sizing: border-box;
-
-                padding: 24px 24px 22px 24px;
-
-                border: 1px solid rgba(130, 145, 170, 0.35);
-                border-radius: 14px;
-
-                background: rgba(18, 27, 40, 0.72);
-
-                display: flex;
-                flex-direction: column;
-
-                overflow: hidden;
-
-                box-shadow:
-                    0 4px 14px rgba(0, 0, 0, 0.10);
-            }
-
-
-            /* ============================================================
-            DAY BADGE
-            ============================================================ */
-
-            .forecast-day-label {
-                display: inline-flex;
-                align-items: center;
-
-                width: fit-content;
-
-                padding: 7px 13px;
-
-                margin-bottom: 18px;
-
-                border-radius: 7px;
-
-                background: linear-gradient(
-                    135deg,
-                    #3556c7,
-                    #2944a5
-                );
-
-                color: #ffffff;
-
-                font-size: 0.85rem;
-                font-weight: 700;
-                line-height: 1;
-
-                box-shadow:
-                    0 5px 14px rgba(39, 69, 170, 0.25);
-            }
-
-
-            /* ============================================================
-            DATE
-            ============================================================ */
-
-            .forecast-date {
-                display: flex;
-                align-items: center;
-                gap: 8px;
-
-                padding-bottom: 18px;
-
-                border-bottom: 1px solid rgba(130, 145, 170, 0.20);
-
-                color: rgba(226, 232, 240, 0.78);
-
-                font-size: 0.90rem;
-                font-weight: 500;
-
-                line-height: 1.2;
-            }
-
-
-            .forecast-date::before {
-                content: "📅";
-                font-size: 1rem;
-                line-height: 1;
-            }
-
-
-            /* ============================================================
-            PREDICTED AQI LABEL
-            ============================================================ */
-
-            .forecast-aqi-label {
-                margin-top: 22px;
-
-                color: rgba(226, 232, 240, 0.70);
-
-                font-size: 0.82rem;
-                font-weight: 500;
-
-                line-height: 1.2;
-            }
-
-
-            /* ============================================================
-            AQI VALUE
-            ============================================================ */
-
-            .forecast-aqi-value {
-                margin-top: 8px;
-                margin-bottom: 20px;
-
-                color: #ffffff;
-
-                font-size: 2.8rem;
-                font-weight: 800;
-
-                line-height: 1;
-                letter-spacing: -0.03em;
-            }
-
-
-            /* ============================================================
-            CATEGORY
-            ============================================================ */
-
-            .forecast-category {
-                display: flex;
-                align-items: center;
-
-                gap: 10px;
-
-                min-height: 42px;
-
-                padding-bottom: 18px;
-
-                border-bottom: 1px solid rgba(130, 145, 170, 0.20);
-
-                color: #f8fafc;
-
-                font-size: 0.92rem;
-                font-weight: 650;
-
-                line-height: 1.3;
-            }
-
-
-            .forecast-category-badge {
-                flex: 0 0 14px;
-
-                width: 14px;
-                height: 14px;
-
-                margin-top: 0px;
-
-                border-radius: 50%;
-            }
-
-
-            /* ============================================================
-            CATEGORY COLORS
-            ============================================================ */
-
-            .forecast-good {
-                background: #22c55e;
-            }
-
-            .forecast-moderate {
-                background: #facc15;
-            }
-
-            .forecast-sensitive {
-                background: #ff8a00;
-            }
-
-            .forecast-unhealthy {
-                background: #ef233c;
-            }
-
-            .forecast-very-unhealthy {
-                background: #a855f7;
-            }
-
-            .forecast-hazardous {
-                background: #7f1d1d;
-            }
-
-            .forecast-unknown {
-                background: #64748b;
-            }
-
-
-            /* ============================================================
-            RMSE
-            ============================================================ */
-
-            .forecast-rmse {
-                display: flex;
-                align-items: center;
-
-                gap: 8px;
-
-                margin-top: auto;
-                padding-top: 18px;
-
-                color: rgba(203, 213, 225, 0.68);
-
-                font-size: 0.78rem;
-                font-weight: 450;
-
-                line-height: 1.3;
-            }
-
-
-            .forecast-rmse-icon {
-                flex: 0 0 auto;
-
-                font-size: 1rem;
-            }
-
-
-            /* ============================================================
-            RESPONSIVE
-            ============================================================ */
-
-            @media (max-width: 1100px) {
-
-                .forecast-card {
-                    height: 400px;
-                    min-height: 400px;
-
-                    padding: 22px 20px 20px 20px;
-                }
-
-                .forecast-aqi-value {
-                    font-size: 2.5rem;
-                }
-
-                .forecast-category {
-                    font-size: 0.85rem;
-                }
-
-                .forecast-day-label {
-                    font-size: 0.80rem;
-                }
-            }
         
             .section-gap {
                 margin-top: 1rem;
@@ -585,12 +337,20 @@ def forecast_category_class(category: str) -> str:
     return "forecast-unknown"
 
 def display_timestamp(timestamp: str) -> str:
+    """
+    Convert UTC timestamp from FastAPI to
+    Pakistan Standard Time (Peshawar).
+    """
     try:
         dt = pd.to_datetime(timestamp, utc=True)
-        return dt.strftime("%d %b %Y, %I:%M %p UTC")
+
+        # Convert UTC -> Pakistan Standard Time
+        dt = dt.tz_convert("Asia/Karachi")
+
+        return dt.strftime("%d %b %Y, %I:%M %p PKT")
+
     except Exception:
         return str(timestamp)
-
 
 def theme_colors() -> tuple[str, str, str]:
     """
@@ -649,7 +409,7 @@ def build_line_chart(
 
     fig.update_layout(
         title=title,
-        xaxis_title="Time",
+        xaxis_title="Time (PKT)",
         yaxis_title=y_title,
         height=420,
         margin=dict(l=10, r=10, t=60, b=10),
@@ -912,9 +672,12 @@ trend_hours = current_trend.get("hours", [])
 
 if trend_hours:
     trend_df = pd.DataFrame(trend_hours)
-    trend_df["timestamp"] = pd.to_datetime(
+    trend_df["timestamp"] = (
+        pd.to_datetime(
         trend_df["timestamp"],
         utc=True,
+    )
+    .dt.tz_convert("Asia/Karachi")
     )
     trend_df["aqi"] = pd.to_numeric(
         trend_df["aqi"],
@@ -946,7 +709,7 @@ else:
 
 st.divider()
 
-st.subheader(" Next 3-Day AQI Forecast for Peshawar")
+st.subheader("Next 3-Day AQI Forecast for Peshawar")
 
 forecast_days = normalize_forecast_days(forecast)
 
@@ -956,60 +719,118 @@ if not forecast_days:
 
 else:
 
-    # --------------------------------------------------------
-    # THREE EQUAL-WIDTH FORECAST CARDS
-    # --------------------------------------------------------
+    # ========================================================
+    # THREE EQUAL FORECAST CARDS
+    # ========================================================
 
     cards = st.columns(
         3,
-        gap="small",
+        gap="medium",
+        vertical_alignment="top",
     )
 
     for card, item in zip(cards, forecast_days):
 
         with card:
 
-            date_text = item.get("date") or "Unknown date"
-
-            aqi = item.get("aqi")
-
-            category = (
-                item.get("category")
-                or "Unknown"
-            )
-
-            rmse = item.get("model_rmse")
-
-            category_class = forecast_category_class(
-                category
-            )
-
             # ------------------------------------------------
-            # FORECAST CARD
+            # CARD CONTAINER
             # ------------------------------------------------
 
-            # Card heading
-            st.markdown(
-                f"**Day {item['day_number']}**  \n"
-                f"_{date_text}_"
-            )
+            with st.container(
+                border=True,
+                key=f"forecast_card_{item['day_number']}",
+                gap="small",
+            ):
 
-            # AQI value
-            st.metric(
-                label="Predicted AQI",
-                value=format_number(aqi, 1),
-            )
+                date_text = item.get("date") or "Unknown date"
 
-            # Category
-            st.markdown(
-                f"### {category_badge(category)} {category}"
-            )
+                aqi = item.get("aqi")
 
-            # RMSE
-            st.caption(
-                f"Prediction error (RMSE): "
-                f"{format_number(rmse, 3)}"
-            )
+                category = (
+                    item.get("category")
+                    or "Unknown"
+                )
+
+                rmse = item.get("model_rmse")
+
+                # ------------------------------------------------
+                # DAY
+                # ------------------------------------------------
+
+                st.markdown(
+                    f"**Day {item['day_number']}**"
+                )
+
+                # ------------------------------------------------
+                # DATE
+                # ------------------------------------------------
+
+                st.caption(
+                    f"📅 {date_text}"
+                )
+
+                # ------------------------------------------------
+                # PREDICTED AQI
+                # ------------------------------------------------
+
+                st.markdown(
+                    '<div style="'
+                    'font-size:0.82rem;'
+                    'color:rgba(226,232,240,0.70);'
+                    'margin-top:0.45rem;'
+                    'margin-bottom:0.15rem;'
+                    '">'
+                    'Predicted AQI'
+                    '</div>',
+                    unsafe_allow_html=True,
+                )
+
+                st.markdown(
+                    f'<div style="'
+                    f'font-size:2.15rem;'
+                    f'font-weight:700;'
+                    f'line-height:1.1;'
+                    f'margin-bottom:0.65rem;'
+                    f'">'
+                    f'{format_number(aqi, 1)}'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # ------------------------------------------------
+                # CATEGORY
+                # ------------------------------------------------
+
+                category_emoji = category_badge(category)
+
+                st.markdown(
+                    f'<div style="'
+                    f'display:flex;'
+                    f'align-items:center;'
+                    f'gap:0.45rem;'
+                    f'font-size:0.88rem;'
+                    f'font-weight:600;'
+                    f'line-height:1.3;'
+                    f'min-height:2.3rem;'
+                    f'margin-bottom:0.7rem;'
+                    f'">'
+                    f'<span style="font-size:0.95rem;">'
+                    f'{category_emoji}'
+                    f'</span>'
+                    f'<span>{category}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                # ------------------------------------------------
+                # RMSE
+                # ------------------------------------------------
+
+                st.caption(
+                    f"Prediction error (RMSE): "
+                    f"{format_number(rmse, 3)}"
+                )
 
 
 # ============================================================
@@ -1023,9 +844,12 @@ hourly_forecast = forecast.get("hourly", [])
 if hourly_forecast:
     hourly_df = pd.DataFrame(hourly_forecast)
 
-    hourly_df["timestamp"] = pd.to_datetime(
+    hourly_df["timestamp"] = (
+        pd.to_datetime(
         hourly_df["timestamp"],
         utc=True,
+    )
+    .dt.tz_convert("Asia/Karachi")
     )
 
     hourly_df["aqi"] = pd.to_numeric(
@@ -1068,7 +892,7 @@ else:
 
 st.divider()
 
-st.subheader("🔎 Why Is the AQI Expected to Be This Way?")
+st.subheader(" Why Is the AQI Expected to Be This Way?")
 
 st.markdown(
     """
@@ -1102,7 +926,7 @@ else:
             continue
 
         with st.expander(
-            f"📅 Day {item['day_number']} — {forecast_date}",
+            f" Day {item['day_number']} — {forecast_date}",
             expanded=(item["day_number"] == 1),
         ):
 
@@ -1324,7 +1148,7 @@ else:
                 if strongest_value > 0:
 
                     st.info(
-                        f"💡 **What this means:** "
+                        f" **What this means:** "
                         f"{strongest_name} was one of the "
                         f"strongest factors pushing the predicted "
                         f"AQI higher on {forecast_date}."
@@ -1333,7 +1157,7 @@ else:
                 elif strongest_value < 0:
 
                     st.success(
-                        f"💡 **What this means:** "
+                        f" **What this means:** "
                         f"{strongest_name} was one of the "
                         f"strongest factors helping to keep the "
                         f"predicted AQI lower on {forecast_date}."
@@ -1342,7 +1166,7 @@ else:
                 else:
 
                     st.info(
-                        f"💡 **What this means:** "
+                        f" **What this means:** "
                         f"{strongest_name} had the strongest overall "
                         f"influence on the prediction for "
                         f"{forecast_date}."
