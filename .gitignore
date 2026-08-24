@@ -2,6 +2,13 @@
 __pycache__/
 *.py[cod]
 
+# Pytest
+.pytest_cache/
+
+# Streamlit
+.streamlit/secrets.toml
+
+
 # Jupyter
 .ipynb_checkpoints/
 
@@ -18,7 +25,7 @@ data/raw/
 data/processed/
 
 # Model files
-models/
+
 notebooks/models/*.pkl
 notebooks/models/*.joblib
 notebooks/models/*.keras
@@ -36,5 +43,9 @@ Thumbs.db
 
 # VS Code
 .vscode/
+
 # Prediction outputs
 data/predictions/
+
+# Feast local stores
+feature_repo/feature_repo/data/*.db
