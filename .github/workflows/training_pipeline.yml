@@ -1,0 +1,58 @@
+name: Pearls AQI - Daily Training Pipeline
+
+on:
+  schedule:
+    # Every day at 02:30 UTC
+    - cron: "30 2 * * *"
+
+  workflow_dispatch:
+
+jobs:
+  training_pipeline:
+    name: Train AQI Models
+    runs-on: ubuntu-latest
+
+    steps:
+
+      # --------------------------------------------------------
+      # 1. Checkout repository
+      # --------------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      # --------------------------------------------------------
+      # 2. Setup Python
+      # --------------------------------------------------------
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # --------------------------------------------------------
+      # 3. Install dependencies
+      # --------------------------------------------------------
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas pyarrow numpy scikit-learn xgboost joblib
+
+      # --------------------------------------------------------
+      # 4. Verify feature dataset
+      # --------------------------------------------------------
+      - name: Verify feature dataset
+        run: |
+          python -c "import pandas as pd; df=pd.read_parquet('data/processed/aqi_features.parquet'); print('Feature dataset shape:', df.shape); print('Missing values:', df.isna().sum().sum())"
+
+      # --------------------------------------------------------
+      # 5. Run model training
+      # --------------------------------------------------------
+      - name: Run daily training pipeline
+        run: |
+          python src/models/train.py
+
+      # --------------------------------------------------------
+      # 6. Verify champion model
+      # --------------------------------------------------------
+      - name: Verify champion model
+        run: |
+          python -c "import os; assert os.path.exists('models/champion_model.pkl'), 'Champion model was not created'; assert os.path.exists('models/champion_metadata.json'), 'Champion metadata was not created'; print('Champion model and metadata verified successfully.')"
