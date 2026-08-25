@@ -55,6 +55,8 @@ import mlflow
 import numpy as np
 import pandas as pd
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from feast import FeatureStore
 
@@ -457,9 +459,8 @@ def get_api_forecast_hours():
 
     forecast_end = (
         forecast_start
-        + pd.Timedelta(hours=71)
+        + pd.Timedelta(hours=FORECAST_HOURS - 1)
     )
-
     current_hour = now_utc.floor("h")
 
     required_hours = int(
@@ -1086,6 +1087,7 @@ def predict_forecast(
     # NEXT 3 CALENDAR DAYS
     # ============================================================
 
+   
     now_utc = pd.Timestamp.now(tz="UTC")
 
     current_date = now_utc.date()
@@ -1097,7 +1099,7 @@ def predict_forecast(
 
     forecast_end = (
         forecast_start
-        + pd.Timedelta(hours=71)
+        + pd.Timedelta(hours=FORECAST_HOURS - 1)
     )
 
     print("Current UTC time:", now_utc)
@@ -1490,9 +1492,7 @@ def predict_forecast(
     )
 
     forecast_df["forecast_day"] = (
-        forecast_df[
-            "timestamp"
-        ]
+        forecast_df["timestamp"]
         .dt.date
     )
 

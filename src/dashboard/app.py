@@ -872,6 +872,16 @@ if hourly_forecast:
         "Predicted AQI — Next 72 Hours",
     )
 
+    
+    fig.update_xaxes(
+        type="date",
+        range=[
+            hourly_df["timestamp"].min(),
+            hourly_df["timestamp"].max()
+        ],
+        autorange=False,
+    )
+
     st.plotly_chart(
         fig,
         width="stretch",
