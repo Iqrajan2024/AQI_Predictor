@@ -268,6 +268,95 @@ def get_aqi_category(aqi: float) -> str:
 
     return "Hazardous"
 
+# ============================================================
+# AQI HEALTH ALERT
+# ============================================================
+
+def get_aqi_health_alert(aqi: float) -> dict:
+
+    if aqi <= 50:
+        return {
+            "alert": False,
+            "level": "Good",
+            "message": (
+                "Air quality is considered satisfactory "
+                "and poses little or no risk."
+            ),
+            "recommendation": (
+                "No special precautions are needed."
+            ),
+        }
+
+    if aqi <= 100:
+        return {
+            "alert": False,
+            "level": "Moderate",
+            "message": (
+                "Air quality is acceptable, although "
+                "unusually sensitive people may experience "
+                "some health effects."
+            ),
+            "recommendation": (
+                "Unusually sensitive individuals should "
+                "consider reducing prolonged outdoor exertion."
+            ),
+        }
+
+    if aqi <= 150:
+        return {
+            "alert": True,
+            "level": "Unhealthy for Sensitive Groups",
+            "message": (
+                "Members of sensitive groups may "
+                "experience health effects."
+            ),
+            "recommendation": (
+                "Sensitive individuals should consider "
+                "reducing prolonged or heavy outdoor exertion."
+            ),
+        }
+
+    if aqi <= 200:
+        return {
+            "alert": True,
+            "level": "Unhealthy",
+            "message": (
+                "Everyone may begin to experience "
+                "health effects."
+            ),
+            "recommendation": (
+                "Sensitive groups should avoid prolonged "
+                "or heavy outdoor exertion. Others should "
+                "consider reducing prolonged or heavy exertion."
+            ),
+        }
+
+    if aqi <= 300:
+        return {
+            "alert": True,
+            "level": "Very Unhealthy",
+            "message": (
+                "Health alert: everyone may experience "
+                "more serious health effects."
+            ),
+            "recommendation": (
+                "Everyone should avoid prolonged or "
+                "heavy outdoor exertion."
+            ),
+        }
+
+    return {
+        "alert": True,
+        "level": "Hazardous",
+        "message": (
+            "Health warning: emergency conditions. "
+            "The entire population is more likely to be affected."
+        ),
+        "recommendation": (
+            "Everyone should avoid outdoor exertion "
+            "and reduce exposure to outdoor air pollution."
+        ),
+    }
 
 # ============================================================
 # LOAD MODEL
@@ -517,6 +606,8 @@ def current_aqi():
         latest["us_aqi"]
     )
 
+    health_alert = get_aqi_health_alert(aqi)
+
     return {
 
         "location": LOCATION_ID,
@@ -529,6 +620,8 @@ def current_aqi():
         "aqi": round(aqi, 2),
 
         "category": get_aqi_category(aqi),
+
+        "health_alert": health_alert,
 
         "pollutants": {
 
@@ -690,6 +783,8 @@ def forecast():
             row["predicted_aqi"]
         )
 
+        health_alert = get_aqi_health_alert(aqi)
+
         daily_records.append({
 
             "date": str(
@@ -705,6 +800,8 @@ def forecast():
                 aqi
             ),
 
+            "health_alert": health_alert,
+
             "model_rmse": rmse,
         })
 
@@ -715,6 +812,8 @@ def forecast():
         aqi = float(
             row["predicted_aqi"]
         )
+
+        health_alert = get_aqi_health_alert(aqi)
 
         hourly_records.append({
 
@@ -731,6 +830,8 @@ def forecast():
             "category": get_aqi_category(
                 aqi
             ),
+
+            "health_alert": health_alert,
         })
 
     return {
@@ -813,6 +914,8 @@ def forecast_day(
         result["predicted_aqi"].mean()
     )
 
+    health_alert = get_aqi_health_alert(mean_aqi)
+
     return {
 
         "date": forecast_day,
@@ -825,6 +928,8 @@ def forecast_day(
         "category": get_aqi_category(
             mean_aqi
         ),
+
+        "health_alert": health_alert,
 
         "model_rmse": get_model_rmse(),
 
@@ -844,6 +949,12 @@ def forecast_day(
                 ),
 
                 "category": get_aqi_category(
+                    float(
+                        row["predicted_aqi"]
+                    )
+                ),
+
+                "health_alert": get_aqi_health_alert(
                     float(
                         row["predicted_aqi"]
                     )

@@ -158,7 +158,7 @@ def api_get(endpoint: str, timeout: int = 45) -> Any:
         ) from exc
 
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=0, show_spinner=False)
 def get_dashboard_data(api_url: str) -> dict:
     """Load current AQI, current trend, and forecast data."""
     base = api_url.rstrip("/")
@@ -474,12 +474,11 @@ def build_shap_chart(
 
     return fig
 
-
 def normalize_forecast_days(forecast: dict) -> list[dict]:
     """
     Return exactly the three daily forecast records supplied by FastAPI.
 
-    The prediction pipeline is expected to produce the next three days,
+    The prediction pipeline produces the next three calendar days,
     excluding the current day.
     """
     days = forecast.get("daily", [])
@@ -492,8 +491,17 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
                 "day_number": index,
                 "date": record.get("date"),
                 "aqi": record.get("aqi"),
-                "category": record.get("category", "Unknown"),
-                "model_rmse": record.get("model_rmse"),
+                "category": record.get(
+                    "category",
+                    "Unknown",
+                ),
+                "health_alert": record.get(
+                    "health_alert",
+                    {},
+                ),
+                "model_rmse": record.get(
+                    "model_rmse",
+                ),
             }
         )
 
@@ -532,8 +540,7 @@ with st.sidebar:
     )
 
     if refresh:
-        get_dashboard_data.clear()
-        get_shap_data.clear()
+        st.cache_data.clear()
         st.rerun()
 
     st.caption(
@@ -752,7 +759,14 @@ else:
                     or "Unknown"
                 )
 
+
                 rmse = item.get("model_rmse")
+
+                health_alert = item.get("health_alert") or {}
+                alert_active = bool(health_alert.get("alert", False))
+                alert_level = health_alert.get("level", category)
+                alert_message = health_alert.get("message", "")
+                alert_recommendation = health_alert.get("recommendation", "")
 
                 # ------------------------------------------------
                 # DAY
@@ -823,6 +837,8 @@ else:
                     unsafe_allow_html=True,
                 )
 
+            
+
                 # ------------------------------------------------
                 # RMSE
                 # ------------------------------------------------
@@ -831,6 +847,18 @@ else:
                     f"Prediction error (RMSE): "
                     f"{format_number(rmse, 3)}"
                 )
+
+                # ------------------------------------------------
+                # HEALTH ALERT
+                # ------------------------------------------------
+
+                if alert_active:
+
+                    st.warning(
+                        f"**{alert_level} — Health Alert**\n\n"
+                        f"{alert_message}\n\n"
+                        f"**Recommendation:** {alert_recommendation}"
+                    )
 
 
 # ============================================================
@@ -844,12 +872,10 @@ hourly_forecast = forecast.get("hourly", [])
 if hourly_forecast:
     hourly_df = pd.DataFrame(hourly_forecast)
 
-    hourly_df["timestamp"] = (
-        pd.to_datetime(
+    hourly_df["timestamp"] = pd.to_datetime(
         hourly_df["timestamp"],
         utc=True,
-    )
-    .dt.tz_convert("Asia/Karachi")
+        errors="coerce",
     )
 
     hourly_df["aqi"] = pd.to_numeric(
@@ -1188,12 +1214,7 @@ else:
 
                 st.markdown(
                     """
-                    **How to read this chart**
-
-                    - 🟠 **Higher AQI:** The factor pushed the prediction upward.
-                    - 🔵 **Lower AQI:** The factor pushed the prediction downward.
-                    - **Longer bar:** Greater influence on the prediction.
-
+                   
                     These explanations summarize the factors considered
                     by the prediction model; they do not mean that one
                     factor alone determines the AQI.
