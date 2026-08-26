@@ -52,7 +52,7 @@ jobs:
       # --------------------------------------------------------
       - name: Create test feature dataset
         run: |
-          python tests/create_test_features.py
+          python -m pytest tests/test_features.py
 
       # --------------------------------------------------------
       # 5. Run tests
