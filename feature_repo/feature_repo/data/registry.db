@@ -9,8 +9,8 @@ A
 __dummy"
 __dummy_idJ
 pearls_aqi
-â¿ŒÔĞÖî‚â¿ŒÔĞÖî‚1"$b0614a7d-3987-415f-9859-33538fb0c729*ÒÀŒÔ ×ùƒ2
-ã
+â¿ŒÔĞÖî‚â¿ŒÔĞÖî‚1"$18d8db1a-ee23-47be-8be9-f5d0aba7605f*­£½Ôğæ–¤2º
+ÿ
 aqi_features
 pearls_aqiaqi_location"
 temperature_2m"
@@ -24,7 +24,9 @@ pearls_aqiaqi_location"
 carbon_monoxide"
 nitrogen_dioxide"
 sulphur_dioxide"	
-ozone"
+ozone"
+
+us_aqi"
 hour"
 day_of_week"
 day_of_month"	
@@ -90,10 +92,12 @@ pm10_lag_6"
 pm2_5_change_1h"
 pm2_5_change_24h"
 pm10_change_1h"
-pm10_change_24h2€†°–:£	timestampZ+)../../data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_source’â¿ŒÔ˜şÌ"â¿ŒÔğ”»‚@b
+pm10_change_24h"
+
+target_aqi2€†°–:£	timestampZ+)../../data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_source’­£½Ô˜éØŞ"­£½Ô˜éØŞ@b
 location_id’latest6
-â¿ŒÔè›ÿ‚ÒÀŒÔøë±ƒ
-ÒºÜ½ ğÖğô¹Ó0RŸ
+â¿ŒÔè›ÿ‚­£½Ôøá–›
+ÒºÜ½ ğÖğô¹Ó RŸ
 œ
 ,feast.infra.online_stores.sqlite.SqliteTable"l
 QD:\Internship\pearls-aqi-predictor\feature_repo\feature_repo\data\online_store.dbpearls_aqi_aqi_featuresb°	timestampZ+)../../data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_sourceª
@@ -101,7 +105,7 @@ pearls_aqi’â¿ŒÔ˜şÌ"â¿ŒÔğ”»‚Š,
 
 
 pearls_aqi
-â¿ŒÔğ¿ŸÏâ¿ŒÔğ¿ŸÏ’æ
+â¿ŒÔğ¿ŸÏâ¿ŒÔğ¿ŸÏ’„
 ã
 aqi_features
 pearls_aqi"feature_view*„
@@ -188,3 +192,94 @@ pm10_lag_6"
 pm10_change_24h2€†°–:£	timestampZ+)../../data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_source’â¿ŒÔ˜şÌ"â¿ŒÔğ”»‚@b
 location_id’latest
 â¿ŒÔè›ÿ‚â¿ŒÔè›ÿ‚2â¿ŒÔğè–…B$3c30e2fc-2e9f-4549-9f5f-e60cb240c359
+›
+aqi_features
+pearls_aqi"feature_view*º
+ÿ
+aqi_features
+pearls_aqiaqi_location"
+temperature_2m"
+relative_humidity_2m"
+pressure_msl"
+precipitation"
+wind_speed_10m"
+wind_direction_10m"	
+pm2_5"
+pm10"
+carbon_monoxide"
+nitrogen_dioxide"
+sulphur_dioxide"	
+ozone"
+
+us_aqi"
+hour"
+day_of_week"
+day_of_month"	
+month"
+
+is_weekend"
+	aqi_lag_1"
+	aqi_lag_3"
+	aqi_lag_6"
+
+aqi_lag_12"
+
+aqi_lag_24"
+
+aqi_lag_48"
+
+aqi_lag_72"
+pm2_5_lag_1"
+pm2_5_lag_3"
+pm2_5_lag_6"
+pm2_5_lag_24"
+
+pm10_lag_1"
+
+pm10_lag_3"
+
+pm10_lag_6"
+pm10_lag_24"
+carbon_monoxide_lag_1"
+carbon_monoxide_lag_3"
+carbon_monoxide_lag_6"
+carbon_monoxide_lag_24"
+nitrogen_dioxide_lag_1"
+nitrogen_dioxide_lag_3"
+nitrogen_dioxide_lag_6"
+nitrogen_dioxide_lag_24"
+sulphur_dioxide_lag_1"
+sulphur_dioxide_lag_3"
+sulphur_dioxide_lag_6"
+sulphur_dioxide_lag_24"
+ozone_lag_1"
+ozone_lag_3"
+ozone_lag_6"
+ozone_lag_24"
+aqi_3h_mean"
+aqi_6h_mean"
+aqi_12h_mean"
+aqi_24h_mean"
+pm2_5_3h_mean"
+pm2_5_6h_mean"
+pm2_5_24h_mean"
+pm10_3h_mean"
+pm10_6h_mean"
+pm10_24h_mean"
+carbon_monoxide_24h_mean"
+nitrogen_dioxide_24h_mean"
+sulphur_dioxide_24h_mean"
+ozone_24h_mean"
+aqi_change_1h"
+aqi_change_3h"
+aqi_change_6h"
+aqi_change_24h"
+pm2_5_change_1h"
+pm2_5_change_24h"
+pm10_change_1h"
+pm10_change_24h"
+
+target_aqi2€†°–:£	timestampZ+)../../data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_source’­£½Ô˜éØŞ"­£½Ô˜éØŞ@b
+location_id’latest6
+â¿ŒÔè›ÿ‚­£½Ôøá–›
+ÒºÜ½ ğÖğô¹Ó 2­£½ÔĞü±£B$01e9a493-eb9e-4124-874b-9da78f28a2aa

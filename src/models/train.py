@@ -1,103 +1,58 @@
-"""
-============================================================
-PEARLS AQI PREDICTOR
-DAILY MODEL TRAINING PIPELINE
-============================================================
-
-Loads the processed AQI feature dataset, trains multiple
-regression models, evaluates them, selects the best model,
-and saves the trained models.
-
-Input:
-    data/processed/aqi_features.parquet
-
-Output:
-    models/ridge_aqi_model.pkl
-    models/ridge_scaler.pkl
-    models/random_forest_aqi.pkl
-    models/xgboost_aqi.pkl
-    models/champion_model.pkl
-    models/champion_metadata.json
-"""
-
 from pathlib import Path
-import json
-import sys
 
-import joblib
-import numpy as np
+import mlflow
+import mlflow.sklearn
 import pandas as pd
 
-from sklearn.preprocessing import StandardScaler
+from feast import FeatureStore
+
 from sklearn.linear_model import Ridge
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import (
-    mean_absolute_error,
-    mean_squared_error,
-    r2_score,
-)
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 from xgboost import XGBRegressor
 
 
 # ============================================================
-# PROJECT PATHS
+# PATHS
 # ============================================================
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-FEATURE_FILE = (
+FEATURE_REPO = (
     PROJECT_ROOT
-    / "data"
-    / "processed"
-    / "aqi_features.parquet"
-)
-
-MODEL_DIR = PROJECT_ROOT / "models"
-
-RIDGE_MODEL_FILE = MODEL_DIR / "ridge_aqi_model.pkl"
-RIDGE_SCALER_FILE = MODEL_DIR / "ridge_scaler.pkl"
-
-RF_MODEL_FILE = MODEL_DIR / "random_forest_aqi.pkl"
-
-XGB_MODEL_FILE = MODEL_DIR / "xgboost_aqi.pkl"
-
-CHAMPION_MODEL_FILE = MODEL_DIR / "champion_model.pkl"
-
-CHAMPION_METADATA_FILE = (
-    MODEL_DIR / "champion_metadata.json"
+    / "feature_repo"
+    / "feature_repo"
 )
 
 
 # ============================================================
-# MODEL FEATURES
+# CONSTANTS
 # ============================================================
 
-FEATURE_COLUMNS = [
-    # Weather
+LOCATION_ID = "peshawar"
+
+MODEL_NAME = "Pearls_AQI_XGBoost"
+
+MODEL_FEATURES = [
     "temperature_2m",
     "relative_humidity_2m",
     "pressure_msl",
     "precipitation",
     "wind_speed_10m",
     "wind_direction_10m",
-
-    # Pollutants
     "pm2_5",
     "pm10",
     "carbon_monoxide",
     "nitrogen_dioxide",
     "sulphur_dioxide",
     "ozone",
-
-    # Time
+    "us_aqi",
     "hour",
     "day_of_week",
     "day_of_month",
     "month",
     "is_weekend",
-
-    # AQI lags
     "aqi_lag_1",
     "aqi_lag_3",
     "aqi_lag_6",
@@ -105,763 +60,426 @@ FEATURE_COLUMNS = [
     "aqi_lag_24",
     "aqi_lag_48",
     "aqi_lag_72",
-
-    # Pollutant lags
     "pm2_5_lag_1",
     "pm2_5_lag_3",
     "pm2_5_lag_6",
     "pm2_5_lag_24",
-
     "pm10_lag_1",
     "pm10_lag_3",
     "pm10_lag_6",
     "pm10_lag_24",
-
     "carbon_monoxide_lag_1",
     "carbon_monoxide_lag_3",
     "carbon_monoxide_lag_6",
     "carbon_monoxide_lag_24",
-
     "nitrogen_dioxide_lag_1",
     "nitrogen_dioxide_lag_3",
     "nitrogen_dioxide_lag_6",
     "nitrogen_dioxide_lag_24",
-
     "sulphur_dioxide_lag_1",
     "sulphur_dioxide_lag_3",
     "sulphur_dioxide_lag_6",
     "sulphur_dioxide_lag_24",
-
     "ozone_lag_1",
     "ozone_lag_3",
     "ozone_lag_6",
     "ozone_lag_24",
-
-    # AQI rolling means
     "aqi_3h_mean",
     "aqi_6h_mean",
     "aqi_12h_mean",
     "aqi_24h_mean",
-
-    # PM2.5 rolling means
     "pm2_5_3h_mean",
     "pm2_5_6h_mean",
     "pm2_5_24h_mean",
-
-    # PM10 rolling means
     "pm10_3h_mean",
     "pm10_6h_mean",
     "pm10_24h_mean",
-
-    # Other pollutant rolling means
     "carbon_monoxide_24h_mean",
     "nitrogen_dioxide_24h_mean",
     "sulphur_dioxide_24h_mean",
     "ozone_24h_mean",
-
-    # Change features
     "aqi_change_1h",
     "aqi_change_3h",
     "aqi_change_6h",
     "aqi_change_24h",
-
     "pm2_5_change_1h",
     "pm2_5_change_24h",
-
     "pm10_change_1h",
     "pm10_change_24h",
 ]
 
-TARGET_COLUMN = "target_aqi"
+
+assert len(MODEL_FEATURES) == 70
+assert "target_aqi" not in MODEL_FEATURES
 
 
 # ============================================================
-# EVALUATION
+# FEAST
 # ============================================================
 
-def evaluate_model(model, X, y, dataset_name):
-    """
-    Evaluate a regression model using MAE, RMSE and R².
-    """
+store = FeatureStore(
+    repo_path=str(FEATURE_REPO)
+)
 
-    predictions = model.predict(X)
+FEATURE_REFS = [
+    f"aqi_features:{feature}"
+    for feature in MODEL_FEATURES
+]
 
-    mae = mean_absolute_error(
-        y,
-        predictions
-    )
-
-    rmse = np.sqrt(
-        mean_squared_error(
-            y,
-            predictions
-        )
-    )
-
-    r2 = r2_score(
-        y,
-        predictions
-    )
-
-    print(f"\n{dataset_name}")
-    print("-" * 40)
-    print(f"MAE  : {mae:.4f}")
-    print(f"RMSE : {rmse:.4f}")
-    print(f"R²   : {r2:.4f}")
-
-    return {
-        "MAE": float(mae),
-        "RMSE": float(rmse),
-        "R2": float(r2),
-    }
+FEATURE_REFS.append(
+    "aqi_features:target_aqi"
+)
 
 
 # ============================================================
-# MAIN TRAINING PIPELINE
+# BUILD ENTITY DATAFRAME
 # ============================================================
 
-def main():
+source = store.get_data_source(
+    "aqi_features_source"
+)
 
-    print("=" * 60)
-    print("PEARLS AQI PREDICTOR")
-    print("DAILY MODEL TRAINING PIPELINE")
-    print("=" * 60)
+entity_sql = f"""
+SELECT
+    location_id,
+    timestamp AS event_timestamp
+FROM {source.get_table_query_string()}
+WHERE location_id = '{LOCATION_ID}'
+"""
 
-    print(f"Project root: {PROJECT_ROOT}")
-    print(f"Python executable: {sys.executable}")
 
-    print("\nFeature file:")
-    print(FEATURE_FILE)
+# ============================================================
+# HISTORICAL RETRIEVAL THROUGH FEAST
+# ============================================================
 
-    # --------------------------------------------------------
-    # CHECK INPUT
-    # --------------------------------------------------------
+print("=" * 60)
+print("RETRIEVING HISTORICAL TRAINING DATA FROM FEAST")
+print("=" * 60)
 
-    if not FEATURE_FILE.exists():
-
-        raise FileNotFoundError(
-            f"Feature dataset not found:\n{FEATURE_FILE}"
-        )
-
-    # --------------------------------------------------------
-    # LOAD DATA
-    # --------------------------------------------------------
-
-    print("\n" + "=" * 60)
-    print("LOADING FEATURE DATASET")
-    print("=" * 60)
-
-    df = pd.read_parquet(
-        FEATURE_FILE
+historical = (
+    store
+    .get_historical_features(
+        entity_df=entity_sql,
+        features=FEATURE_REFS,
     )
+    .to_df()
+)
 
-    print("Dataset shape:", df.shape)
 
-    # --------------------------------------------------------
-    # VERIFY COLUMNS
-    # --------------------------------------------------------
+historical.columns = [
+    column.split(":")[-1]
+    for column in historical.columns
+]
 
-    missing_features = [
-        column
-        for column in FEATURE_COLUMNS
-        if column not in df.columns
+
+historical["timestamp"] = pd.to_datetime(
+    historical["event_timestamp"],
+    utc=True,
+)
+
+historical = (
+    historical
+    .sort_values("timestamp")
+    .reset_index(drop=True)
+)
+
+
+required = (
+    MODEL_FEATURES
+    + [
+        "target_aqi",
+        "timestamp",
     ]
+)
 
-    if missing_features:
 
-        raise ValueError(
-            "Missing model features:\n"
-            + "\n".join(missing_features)
-        )
+missing = [
+    column
+    for column in required
+    if column not in historical.columns
+]
 
-    if TARGET_COLUMN not in df.columns:
-
-        raise ValueError(
-            f"Missing target column: {TARGET_COLUMN}"
-        )
-
-    print(
-        f"✓ All {len(FEATURE_COLUMNS)} model features found"
+if missing:
+    raise ValueError(
+        f"Feast historical retrieval missing: {missing}"
     )
 
-    print(
-        f"✓ Target column '{TARGET_COLUMN}' found"
+
+historical = historical.dropna(
+    subset=required
+).reset_index(drop=True)
+
+
+if historical.empty:
+    raise ValueError(
+        "Feast returned no historical training data."
     )
 
-    # --------------------------------------------------------
-    # SORT CHRONOLOGICALLY
-    # --------------------------------------------------------
 
-    if "timestamp" not in df.columns:
+print("FEAST TRAINING DATA READY")
+print("Rows:", len(historical))
+print("70 model features:", len(MODEL_FEATURES))
+print("Target: target_aqi")
+print("First:", historical["timestamp"].min())
+print("Last:", historical["timestamp"].max())
 
-        raise ValueError(
-            "Required column 'timestamp' is missing."
-        )
 
-    df["timestamp"] = pd.to_datetime(
-        df["timestamp"],
-        utc=True
-    )
+# ============================================================
+# TRAIN / VALIDATION / TEST
+# ============================================================
 
-    df = (
-        df
-        .sort_values("timestamp")
-        .reset_index(drop=True)
-    )
+X = historical[MODEL_FEATURES]
+y = historical["target_aqi"]
 
-    # --------------------------------------------------------
-    # FINAL DATA CHECK
-    # --------------------------------------------------------
+n = len(historical)
 
-    feature_data = df[FEATURE_COLUMNS]
+train_end = int(n * 0.70)
+validation_end = int(n * 0.85)
 
-    target_data = df[TARGET_COLUMN]
+X_train = X.iloc[:train_end]
+y_train = y.iloc[:train_end]
 
-    if feature_data.isna().sum().sum() != 0:
+X_validation = X.iloc[
+    train_end:validation_end
+]
+y_validation = y.iloc[
+    train_end:validation_end
+]
 
-        raise ValueError(
-            "Feature dataset contains missing values."
-        )
+X_test = X.iloc[validation_end:]
+y_test = y.iloc[validation_end:]
 
-    if target_data.isna().sum() != 0:
 
-        raise ValueError(
-            "Target dataset contains missing values."
-        )
+# ============================================================
+# MODELS
+# ============================================================
 
-    if not df["timestamp"].is_monotonic_increasing:
+models = {
+    "Ridge": Ridge(alpha=1.0),
 
-        raise ValueError(
-            "Dataset is not chronologically ordered."
-        )
-
-    print("✓ No missing feature values")
-    print("✓ No missing target values")
-    print("✓ Dataset is chronologically ordered")
-
-    # ========================================================
-    # CHRONOLOGICAL TRAIN / VALIDATION / TEST SPLIT
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("CREATING CHRONOLOGICAL DATA SPLIT")
-    print("=" * 60)
-
-    X = df[FEATURE_COLUMNS]
-
-    y = df[TARGET_COLUMN]
-
-    total_rows = len(df)
-
-    train_end = int(
-        total_rows * 0.70
-    )
-
-    validation_end = int(
-        total_rows * 0.85
-    )
-
-    X_train = X.iloc[:train_end]
-    y_train = y.iloc[:train_end]
-
-    X_val = X.iloc[
-        train_end:validation_end
-    ]
-
-    y_val = y.iloc[
-        train_end:validation_end
-    ]
-
-    X_test = X.iloc[
-        validation_end:
-    ]
-
-    y_test = y.iloc[
-        validation_end:
-    ]
-
-    print(
-        "Training shape:",
-        X_train.shape
-    )
-
-    print(
-        "Validation shape:",
-        X_val.shape
-    )
-
-    print(
-        "Testing shape:",
-        X_test.shape
-    )
-
-    # ========================================================
-    # CREATE MODEL DIRECTORY
-    # ========================================================
-
-    MODEL_DIR.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    # ========================================================
-    # RIDGE REGRESSION
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("RIDGE REGRESSION TRAINING")
-    print("=" * 60)
-
-    scaler = StandardScaler()
-
-    X_train_scaled = scaler.fit_transform(
-        X_train
-    )
-
-    X_val_scaled = scaler.transform(
-        X_val
-    )
-
-    X_test_scaled = scaler.transform(
-        X_test
-    )
-
-    ridge_model = Ridge(
-        alpha=1.0
-    )
-
-    print("\nTraining Ridge Regression...")
-
-    ridge_model.fit(
-        X_train_scaled,
-        y_train
-    )
-
-    print(
-        "Ridge training completed."
-    )
-
-    ridge_train_results = evaluate_model(
-        ridge_model,
-        X_train_scaled,
-        y_train,
-        "Training"
-    )
-
-    ridge_val_results = evaluate_model(
-        ridge_model,
-        X_val_scaled,
-        y_val,
-        "Validation"
-    )
-
-    ridge_test_results = evaluate_model(
-        ridge_model,
-        X_test_scaled,
-        y_test,
-        "Testing"
-    )
-
-    joblib.dump(
-        ridge_model,
-        RIDGE_MODEL_FILE
-    )
-
-    joblib.dump(
-        scaler,
-        RIDGE_SCALER_FILE
-    )
-
-    print(
-        "\nRidge model saved:",
-        RIDGE_MODEL_FILE
-    )
-
-    # ========================================================
-    # RANDOM FOREST
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("RANDOM FOREST REGRESSION TRAINING")
-    print("=" * 60)
-
-    rf_model = RandomForestRegressor(
+    "RandomForest": RandomForestRegressor(
         n_estimators=300,
-        max_depth=None,
-        min_samples_split=2,
-        min_samples_leaf=1,
-        max_features="sqrt",
         random_state=42,
-        n_jobs=-1
-    )
+        n_jobs=-1,
+    ),
 
-    print("\nTraining Random Forest...")
-
-    rf_model.fit(
-        X_train,
-        y_train
-    )
-
-    print(
-        "Random Forest training completed."
-    )
-
-    rf_train_results = evaluate_model(
-        rf_model,
-        X_train,
-        y_train,
-        "Training"
-    )
-
-    rf_val_results = evaluate_model(
-        rf_model,
-        X_val,
-        y_val,
-        "Validation"
-    )
-
-    rf_test_results = evaluate_model(
-        rf_model,
-        X_test,
-        y_test,
-        "Testing"
-    )
-
-    joblib.dump(
-        rf_model,
-        RF_MODEL_FILE
-    )
-
-    print(
-        "\nRandom Forest model saved:",
-        RF_MODEL_FILE
-    )
-
-    # ========================================================
-    # XGBOOST
-    # ========================================================
-
-    print("\n" + "=" * 60)
-    print("XGBOOST REGRESSION TRAINING")
-    print("=" * 60)
-
-    xgb_model = XGBRegressor(
-        n_estimators=500,
+    "XGBoost": XGBRegressor(
+        n_estimators=300,
         learning_rate=0.05,
         max_depth=6,
-        min_child_weight=3,
         subsample=0.8,
         colsample_bytree=0.8,
         objective="reg:squarederror",
-        eval_metric="rmse",
         random_state=42,
-        n_jobs=-1
-    )
+        n_jobs=2,
+    ),
+}
 
-    print("\nTraining XGBoost...")
 
-    xgb_model.fit(
-        X_train,
-        y_train,
-        eval_set=[
-            (X_val, y_val)
-        ],
-        verbose=False
-    )
+# ============================================================
+# MLFLOW
+# ============================================================
 
-    print(
-        "XGBoost training completed."
-    )
+MLFLOW_TRACKING_URI = (
+    __import__("os").environ["MLFLOW_TRACKING_URI"]
+)
 
-    xgb_train_results = evaluate_model(
-        xgb_model,
-        X_train,
-        y_train,
-        "Training"
-    )
+mlflow.set_tracking_uri(
+    MLFLOW_TRACKING_URI
+)
 
-    xgb_val_results = evaluate_model(
-        xgb_model,
-        X_val,
-        y_val,
-        "Validation"
-    )
+mlflow.set_experiment(
+    "Pearls_AQI_Training"
+)
 
-    xgb_test_results = evaluate_model(
-        xgb_model,
-        X_test,
-        y_test,
-        "Testing"
-    )
 
-    joblib.dump(
-        xgb_model,
-        XGB_MODEL_FILE
-    )
+# ============================================================
+# TRAIN
+# ============================================================
 
-    print(
-        "\nXGBoost model saved:",
-        XGB_MODEL_FILE
-    )
+results = []
 
-    # ========================================================
-    # MODEL COMPARISON
-    # ========================================================
+for name, model in models.items():
 
-    print("\n" + "=" * 60)
-    print("MODEL COMPARISON")
+    print("=" * 60)
+    print(f"TRAINING {name}")
     print("=" * 60)
 
-    model_results = {
+    with mlflow.start_run(
+        run_name=f"{name}_daily_training"
+    ):
 
-        "Ridge": {
-            "model": ridge_model,
-            "test": ridge_test_results,
-            "model_file": str(
-                RIDGE_MODEL_FILE
-            ),
-        },
-
-        "Random Forest": {
-            "model": rf_model,
-            "test": rf_test_results,
-            "model_file": str(
-                RF_MODEL_FILE
-            ),
-        },
-
-        "XGBoost": {
-            "model": xgb_model,
-            "test": xgb_test_results,
-            "model_file": str(
-                XGB_MODEL_FILE
-            ),
-        },
-    }
-
-    comparison_rows = []
-
-    for model_name, result in model_results.items():
-
-        comparison_rows.append({
-            "Model": model_name,
-            "MAE": result["test"]["MAE"],
-            "RMSE": result["test"]["RMSE"],
-            "R2": result["test"]["R2"],
-        })
-
-    comparison = pd.DataFrame(
-        comparison_rows
-    )
-
-    comparison = comparison.sort_values(
-        "RMSE",
-        ascending=True
-    )
-
-    print(
-        comparison.to_string(
-            index=False
-        )
-    )
-
-    # ========================================================
-    # SELECT CHAMPION
-    # ========================================================
-
-    champion_name = (
-        comparison.iloc[0]["Model"]
-    )
-
-    champion_model = model_results[
-        champion_name
-    ]["model"]
-
-    champion_model_path = (
-        model_results[
-            champion_name
-        ]["model_file"]
-    )
-
-    print("\n" + "=" * 60)
-    print("CHAMPION MODEL")
-    print("=" * 60)
-
-    print(
-        "Champion:",
-        champion_name
-    )
-
-    print(
-        "Test MAE:",
-        f"{comparison.iloc[0]['MAE']:.4f}"
-    )
-
-    print(
-        "Test RMSE:",
-        f"{comparison.iloc[0]['RMSE']:.4f}"
-    )
-
-    print(
-        "Test R²:",
-        f"{comparison.iloc[0]['R2']:.4f}"
-    )
-
-    # --------------------------------------------------------
-    # SAVE CHAMPION MODEL
-    # --------------------------------------------------------
-
-    joblib.dump(
-        champion_model,
-        CHAMPION_MODEL_FILE
-    )
-
-    print(
-        "\nChampion model copied to:",
-        CHAMPION_MODEL_FILE
-    )
-
-    # ========================================================
-    # FEATURE IMPORTANCE
-    # ========================================================
-
-    if champion_name == "XGBoost":
-
-        importance = pd.DataFrame({
-            "feature": FEATURE_COLUMNS,
-            "importance": (
-                xgb_model.feature_importances_
-            )
-        })
-
-        importance = (
-            importance
-            .sort_values(
-                "importance",
-                ascending=False
-            )
+        model.fit(
+            X_train,
+            y_train,
         )
 
-        print("\n" + "=" * 60)
-        print("TOP 20 XGBOOST FEATURES")
-        print("=" * 60)
-
-        print(
-            importance
-            .head(20)
-            .to_string(index=False)
+        validation_pred = model.predict(
+            X_validation
         )
 
-    # ========================================================
-    # SAVE METADATA
-    # ========================================================
-
-    metadata = {
-
-        "champion_model": champion_name,
-
-        "target": TARGET_COLUMN,
-
-        "number_of_features": len(
-            FEATURE_COLUMNS
-        ),
-
-        "features": FEATURE_COLUMNS,
-
-        "test_metrics": {
-            "MAE": float(
-                comparison.iloc[0]["MAE"]
-            ),
-            "RMSE": float(
-                comparison.iloc[0]["RMSE"]
-            ),
-            "R2": float(
-                comparison.iloc[0]["R2"]
-            ),
-        },
-
-        "models": {
-
-            name: {
-                "MAE": result["test"]["MAE"],
-                "RMSE": result["test"]["RMSE"],
-                "R2": result["test"]["R2"],
-                "path": result["model_file"],
-            }
-
-            for name, result
-            in model_results.items()
-        },
-
-        "training_rows": len(
-            X_train
-        ),
-
-        "validation_rows": len(
-            X_val
-        ),
-
-        "testing_rows": len(
+        test_pred = model.predict(
             X_test
-        ),
-    }
-
-    with open(
-        CHAMPION_METADATA_FILE,
-        "w",
-        encoding="utf-8"
-    ) as file:
-
-        json.dump(
-            metadata,
-            file,
-            indent=4
         )
 
-    print(
-        "\nChampion metadata saved:",
-        CHAMPION_METADATA_FILE
-    )
+        validation_rmse = mean_squared_error(
+            y_validation,
+            validation_pred,
+        ) ** 0.5
 
-    # ========================================================
-    # FINAL
-    # ========================================================
+        test_rmse = mean_squared_error(
+            y_test,
+            test_pred,
+        ) ** 0.5
 
-    print("\n" + "=" * 60)
-    print("DAILY TRAINING PIPELINE COMPLETED")
-    print("=" * 60)
+        validation_mae = mean_absolute_error(
+            y_validation,
+            validation_pred,
+        )
 
-    print(
-        "Champion model:",
-        champion_name
-    )
+        test_mae = mean_absolute_error(
+            y_test,
+            test_pred,
+        )
 
-    print(
-        "Champion model path:",
-        CHAMPION_MODEL_FILE
-    )
+        test_r2 = r2_score(
+            y_test,
+            test_pred,
+        )
 
-    print(
-        "Training rows:",
-        len(X_train)
-    )
+        mlflow.log_param(
+            "model",
+            name,
+        )
 
-    print(
-        "Validation rows:",
-        len(X_val)
-    )
+        mlflow.log_metric(
+            "validation_rmse",
+            validation_rmse,
+        )
 
-    print(
-        "Testing rows:",
-        len(X_test)
-    )
+        mlflow.log_metric(
+            "validation_mae",
+            validation_mae,
+        )
 
-    print("\n Training pipeline completed successfully")
+        mlflow.log_metric(
+            "test_rmse",
+            test_rmse,
+        )
+
+        mlflow.log_metric(
+            "test_mae",
+            test_mae,
+        )
+
+        mlflow.log_metric(
+            "test_r2",
+            test_r2,
+        )
+
+        mlflow.log_param(
+            "feature_count",
+            70,
+        )
+
+        mlflow.sklearn.log_model(
+            model,
+            artifact_path="model",
+        )
+
+        results.append({
+            "name": name,
+            "model": model,
+            "test_rmse": test_rmse,
+            "test_mae": test_mae,
+            "test_r2": test_r2,
+        })
 
 
 # ============================================================
-# ENTRY POINT
+# SELECT WINNER
 # ============================================================
 
-if __name__ == "__main__":
-    main()
+results.sort(
+    key=lambda x: x["test_rmse"]
+)
+
+winner = results[0]
+
+winner_name = winner["name"]
+winner_model = winner["model"]
+
+
+print("=" * 60)
+print("CHAMPION")
+print("=" * 60)
+print(winner_name)
+print("RMSE:", winner["test_rmse"])
+print("MAE:", winner["test_mae"])
+print("R2:", winner["test_r2"])
+
+
+# ============================================================
+# REGISTER WINNER IN MLFLOW MODEL REGISTRY
+# ============================================================
+
+with mlflow.start_run(
+    run_name="champion_registration"
+) as run:
+
+    mlflow.log_param(
+        "champion_model",
+        winner_name,
+    )
+
+    mlflow.log_metric(
+        "champion_test_rmse",
+        winner["test_rmse"],
+    )
+
+    model_info = mlflow.sklearn.log_model(
+        winner_model,
+        artifact_path="champion_model",
+        registered_model_name=MODEL_NAME,
+    )
+
+    run_id = run.info.run_id
+
+
+# ============================================================
+# ASSIGN CHAMPION ALIAS
+# ============================================================
+
+client = mlflow.MlflowClient()
+
+model_version = client.get_model_version_by_run_id(
+    run_id
+)
+
+client.set_registered_model_alias(
+    MODEL_NAME,
+    "champion",
+    model_version.version,
+)
+
+client.set_model_version_tag(
+    MODEL_NAME,
+    model_version.version,
+    "model_type",
+    winner_name,
+)
+
+client.set_model_version_tag(
+    MODEL_NAME,
+    model_version.version,
+    "feature_count",
+    "70",
+)
+
+print("=" * 60)
+print("MLFLOW MODEL REGISTRY UPDATED")
+print("=" * 60)
+print("Model:", MODEL_NAME)
+print("Version:", model_version.version)
+print("Alias: champion")
+print("Winner:", winner_name)

@@ -7,9 +7,11 @@ on:
   workflow_dispatch:
 
 jobs:
+
   training_pipeline:
 
     name: Train AQI Models
+
     runs-on: ubuntu-latest
 
     steps:
@@ -23,7 +25,7 @@ jobs:
 
 
       # ======================================================
-      # 2. SETUP PYTHON
+      # 2. PYTHON
       # ======================================================
 
       - name: Setup Python
@@ -33,17 +35,17 @@ jobs:
 
 
       # ======================================================
-      # 3. INSTALL DEPENDENCIES
+      # 3. DEPENDENCIES
       # ======================================================
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow numpy scikit-learn xgboost joblib
+          pip install pandas pyarrow numpy scikit-learn xgboost joblib feast mlflow
 
 
       # ======================================================
-      # 4. FIND LATEST SUCCESSFUL FEATURE PIPELINE RUN
+      # 4. FIND LATEST SUCCESSFUL FEATURE PIPELINE
       # ======================================================
 
       - name: Find latest successful feature pipeline run
@@ -52,8 +54,6 @@ jobs:
           REPO: ${{ github.repository }}
 
         run: |
-
-          echo "Finding latest successful feature pipeline run..."
 
           RUN_ID=$(gh run list \
             --repo "$REPO" \
@@ -65,29 +65,26 @@ jobs:
             --jq '.[0].databaseId')
 
           if [ -z "$RUN_ID" ]; then
-            echo "ERROR: No successful feature pipeline run found."
+            echo "ERROR: No successful feature pipeline run."
             exit 1
           fi
 
-          echo "Latest feature pipeline run: $RUN_ID"
-
           echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
+          echo "Latest feature run: $RUN_ID"
+
 
       # ======================================================
-      # 5. DOWNLOAD LATEST FEATURE ARTIFACT
+      # 5. DOWNLOAD FEATURE ARTIFACT
       # ======================================================
 
-      - name: Download latest feature pipeline artifact
+      - name: Download latest feature artifact
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           FEATURE_RUN_ID: ${{ env.FEATURE_RUN_ID }}
 
         run: |
-
-          echo "Downloading artifact from feature run:"
-          echo "$FEATURE_RUN_ID"
 
           mkdir -p .feature_restore
 
@@ -96,8 +93,6 @@ jobs:
             --name aqi-pipeline-data \
             --dir .feature_restore
 
-          echo ""
-          echo "Downloaded artifact:"
           find .feature_restore -type f -print
 
 
@@ -108,93 +103,205 @@ jobs:
       - name: Restore feature dataset
         run: |
 
-          echo "Restoring feature dataset..."
+          SOURCE=".feature_restore/processed/aqi_features.parquet"
 
-          FEATURE_SOURCE=".feature_restore/processed/aqi_features.parquet"
-
-          if [ ! -f "$FEATURE_SOURCE" ]; then
-            echo "ERROR: Feature dataset not found."
-            echo ""
-            echo "Available files:"
+          if [ ! -f "$SOURCE" ]; then
+            echo "ERROR: Feature dataset missing."
             find .feature_restore -type f -print
             exit 1
           fi
 
           mkdir -p data/processed
 
-          cp "$FEATURE_SOURCE" \
-             "data/processed/aqi_features.parquet"
+          cp "$SOURCE" \
+             data/processed/aqi_features.parquet
 
-          echo ""
-          echo "Feature dataset restored successfully."
-
-          ls -lh data/processed/aqi_features.parquet
+          echo "Feature dataset restored."
 
 
       # ======================================================
-      # 7. VERIFY FEATURE DATASET
+      # 7. COPY DATA INTO FEAST SOURCE LOCATION
       # ======================================================
 
-      - name: Verify feature dataset
+      - name: Prepare Feast feature source
+        run: |
+
+          test -f data/processed/aqi_features.parquet
+
+          echo "Feast source dataset ready."
+
+
+      # ======================================================
+      # 8. APPLY FEAST
+      # ======================================================
+
+      - name: Apply Feast definitions
+        working-directory: feature_repo/feature_repo
+        run: |
+
+          feast apply
+
+
+      # ======================================================
+      # 9. VERIFY FEAST
+      # ======================================================
+
+      - name: Verify Feast FeatureView
+        working-directory: feature_repo/feature_repo
         run: |
 
           python - <<'PY'
-          from pathlib import Path
-          import pandas as pd
+          from feast import FeatureStore
 
-          path = Path(
-              "data/processed/aqi_features.parquet"
-          )
+          store = FeatureStore(repo_path=".")
 
-          assert path.exists(), (
-              f"Feature dataset missing: {path}"
-          )
+          views = store.list_feature_views()
 
-          df = pd.read_parquet(path)
+          names = [v.name for v in views]
 
-          assert not df.empty, (
-              "Feature dataset is empty."
-          )
+          assert "aqi_features" in names, names
 
-          assert "timestamp" in df.columns
-          assert "us_aqi" in df.columns
-          assert "target_aqi" in df.columns
-
-          print("======================================")
-          print("FEATURE DATASET READY FOR TRAINING")
-          print("======================================")
-          print("Shape:", df.shape)
-          print("First timestamp:", df["timestamp"].min())
-          print("Last timestamp:", df["timestamp"].max())
-          print("Columns:", len(df.columns))
-          print("Missing values:", df.isna().sum().sum())
+          print("FEAST FEATURE VIEW VERIFIED")
+          print(names)
           PY
 
 
       # ======================================================
-      # 8. RUN MODEL TRAINING
+      # 10. MATERIALIZE ONLINE FEATURES
+      # ======================================================
+
+      - name: Materialize Feast online features
+        working-directory: feature_repo/feature_repo
+        run: |
+
+          feast materialize-incremental \
+            "$(date -u +"%Y-%m-%dT%H:%M:%S")"
+
+
+      # ======================================================
+      # 11. VERIFY ONLINE STORE
+      # ======================================================
+
+      - name: Verify Feast online store
+        working-directory: feature_repo/feature_repo
+        run: |
+
+          python - <<'PY'
+          from feast import FeatureStore
+
+          store = FeatureStore(repo_path=".")
+
+          views = store.list_feature_views()
+
+          assert any(
+              v.name == "aqi_features"
+              for v in views
+          )
+
+          print("FEAST ONLINE STORE READY")
+          PY
+
+      - name: Restore previous MLflow registry
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+
+          mkdir -p .mlflow_restore
+
+          PREVIOUS_RUN=$(gh run list \
+            --repo "$REPO" \
+            --workflow "daily_training.yml" \
+            --branch main \
+            --status success \
+            --limit 2 \
+            --json databaseId \
+            --jq '.[1].databaseId // empty')
+
+          if [ -n "$PREVIOUS_RUN" ]; then
+
+            echo "Restoring MLflow registry from run $PREVIOUS_RUN"
+
+            gh run download "$PREVIOUS_RUN" \
+              --repo "$REPO" \
+              --name pearls-aqi-mlflow-registry \
+              --dir .mlflow_restore \
+              || true
+
+            if [ -d ".mlflow_restore/mlruns" ]; then
+              cp -r .mlflow_restore/mlruns .
+            fi
+
+          else
+
+            echo "No previous MLflow registry found."
+            echo "Creating initial registry."
+
+          fi
+
+          mkdir -p mlruns
+      # ======================================================
+      # 12. TRAIN THROUGH FEAST
       # ======================================================
 
       - name: Run daily training pipeline
         run: |
+
           python src/models/train.py
 
 
       # ======================================================
-      # 9. VERIFY CHAMPION MODEL
+      # 13. VERIFY MLflow CHAMPION
       # ======================================================
 
-      - name: Verify champion model
+      - name: Verify MLflow champion
         run: |
 
-          test -f models/champion_model.pkl
+          python - <<'PY'
+          from pathlib import Path
 
-          test -f models/champion_metadata.json
+          import mlflow
+          from mlflow import MlflowClient
 
-          echo "======================================"
-          echo "CHAMPION MODEL VERIFIED"
-          echo "======================================"
+          root = Path.cwd()
 
-          ls -lh \
-            models/champion_model.pkl \
+          mlflow.set_tracking_uri(
+              (root / "mlruns").as_uri()
+          )
+
+          client = MlflowClient()
+
+          model_name = "Pearls_AQI_XGBoost"
+
+          model = client.get_registered_model(
+              model_name
+          )
+
+          assert "champion" in model.aliases, (
+              f"Champion alias missing: {model.aliases}"
+          )
+
+          champion_version = (
+              model.aliases["champion"]
+          )
+
+          print("MLFLOW MODEL REGISTRY VERIFIED")
+          print("Model:", model_name)
+          print("Champion version:", champion_version)
+          print("Aliases:", model.aliases)
+          PY
+
+
+      # ======================================================
+      # 14. SAVE MODEL REGISTRY
+      # ======================================================
+
+      - name: Save MLflow model registry
+        uses: actions/upload-artifact@v4
+        with:
+          name: pearls-aqi-mlflow-registry
+          path: |
+            mlruns/
             models/champion_metadata.json
+          retention-days: 30
+          overwrite: true

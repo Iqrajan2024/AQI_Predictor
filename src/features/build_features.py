@@ -478,6 +478,8 @@ def main():
 
     print("✓ Change features created")
 
+    
+
     # ========================================================
     # FEATURE VERIFICATION
     # ========================================================
@@ -551,6 +553,8 @@ def main():
     print("✓ No missing target values")
     print("✓ Chronologically ordered")
 
+    df["location_id"] = "peshawar"
+    
     # ========================================================
     # SAVE
     # ========================================================

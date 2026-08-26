@@ -237,7 +237,51 @@ jobs:
 
           python src/features/build_features.py
 
+      - name: Install Feast
+        run: |
+          pip install feast
+      
+      - name: Apply Feast feature definitions
+        run: |
+          cd feature_repo/feature_repo
+          feast apply
+        
+      - name: Materialize latest features into Feast
+        run: |
+          cd feature_repo/feature_repo
 
+          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
+
+          feast materialize-incremental "$CURRENT_TIME"
+
+      - name: Verify Feast online store
+        run: |
+          python - <<'PY'
+          from feast import FeatureStore
+
+          store = FeatureStore(
+              repo_path="feature_repo/feature_repo"
+          )
+
+          features = [
+              "aqi_features:temperature_2m",
+              "aqi_features:pm2_5",
+              "aqi_features:us_aqi",
+          ]
+
+          result = store.get_online_features(
+              features=features,
+              entity_rows=[
+                  {"location_id": "peshawar"}
+              ],
+          ).to_dict()
+
+          print("FEAST ONLINE STORE VERIFIED")
+          print(result)
+
+          assert result["location_id"][0] == "peshawar"
+          assert result["us_aqi"][0] is not None
+          PY
       # ======================================================
       # 10. VERIFY FEATURE DATASET
       # ======================================================
@@ -297,12 +341,14 @@ jobs:
       # This becomes the input for the NEXT hourly run.
       # ======================================================
 
-      - name: Save latest pipeline state
+      - name: Save pipeline data
         uses: actions/upload-artifact@v4
         with:
           name: aqi-pipeline-data
           path: |
             data/raw/peshawar_openmeteo_2024_2026.csv
             data/processed/aqi_features.parquet
-          retention-days: 30
+            feature_repo/feature_repo/data/registry.db
+            feature_repo/feature_repo/data/online_store.db
+          retention-days: 7
           overwrite: true
