@@ -2,54 +2,157 @@ name: Pearls AQI - Hourly Feature Pipeline
 
 on:
   schedule:
+    # Every hour at minute 15
     - cron: "15 * * * *"
 
   workflow_dispatch:
 
 jobs:
   feature_pipeline:
-    name: Run Feature Engineering
+
+    name: Run Incremental Feature Pipeline
+
     runs-on: ubuntu-latest
 
     steps:
 
+      # ======================================================
+      # 1. CHECKOUT
+      # ======================================================
+
       - name: Checkout repository
         uses: actions/checkout@v6
+
+      # ======================================================
+      # 2. PYTHON
+      # ======================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
+      # ======================================================
+      # 3. INSTALL DEPENDENCIES
+      # ======================================================
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas pyarrow
+          pip install pandas pyarrow requests
 
-      # --------------------------------------------------------
-      # Generate/download raw dataset
-      # --------------------------------------------------------
-      - name: Download raw Open-Meteo dataset
+      # ======================================================
+      # 4. RESTORE PREVIOUS DATA
+      # ======================================================
+
+      - name: Restore previous pipeline data
+        uses: actions/download-artifact@v4
+        with:
+          name: aqi-pipeline-data
+          path: .
+        continue-on-error: true
+
+      # ======================================================
+      # 5. SHOW RESTORED FILES
+      # ======================================================
+
+      - name: Check existing raw dataset
         run: |
-          python src/data/historical_backfill.py
+          if [ -f data/raw/peshawar_openmeteo_2024_2026.csv ]; then
+            echo "Existing raw dataset found."
+            python -c "import pandas as pd; df=pd.read_csv('data/raw/peshawar_openmeteo_2024_2026.csv'); print('Rows:', len(df)); print('Latest:', df['timestamp'].max())"
+          else
+            echo "No previous raw dataset found."
+            echo "This will be the INITIAL BACKFILL."
+          fi
 
-      # --------------------------------------------------------
-      # Verify raw dataset
-      # --------------------------------------------------------
-      - name: Verify raw dataset
+      # ======================================================
+      # 6. UPDATE RAW DATA
+      # ======================================================
+
+      - name: Update raw Open-Meteo dataset
         run: |
-          python -c "from pathlib import Path; p=Path('data/raw/peshawar_openmeteo_2024_2026.csv'); print('Raw dataset exists:', p.exists()); print('Raw dataset size:', p.stat().st_size if p.exists() else 0); assert p.exists(), 'Raw dataset was not generated'"
+          python src/data/update_raw_dataset.py
 
-      # --------------------------------------------------------
-      # Build features
-      # --------------------------------------------------------
-      - name: Run feature engineering pipeline
+      # ======================================================
+      # 7. BUILD FEATURES
+      # ======================================================
+
+      - name: Run feature engineering
         run: |
           python src/features/build_features.py
 
-      # --------------------------------------------------------
-      # Verify feature dataset
-      # --------------------------------------------------------
+      # ======================================================
+      # 8. VERIFY RAW DATA
+      # ======================================================
+
+      - name: Verify raw dataset
+        run: |
+          python - <<'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          path = Path(
+              "data/raw/peshawar_openmeteo_2024_2026.csv"
+          )
+
+          assert path.exists(), \
+              "Raw dataset was not created."
+
+          df = pd.read_csv(path)
+
+          assert len(df) > 0, \
+              "Raw dataset is empty."
+
+          assert "timestamp" in df.columns, \
+              "timestamp column missing."
+
+          print("RAW DATASET VERIFIED")
+          print("Shape:", df.shape)
+          print("First:", df["timestamp"].min())
+          print("Last:", df["timestamp"].max())
+          print("Missing values:", df.isna().sum().sum())
+          PY
+
+      # ======================================================
+      # 9. VERIFY FEATURES
+      # ======================================================
+
       - name: Verify feature dataset
         run: |
-          python -c "import pandas as pd; from pathlib import Path; p=Path('data/processed/aqi_features.parquet'); print('Feature file exists:', p.exists()); assert p.exists(), 'Feature file was not generated'; df=pd.read_parquet(p); print('Feature dataset shape:', df.shape); print('Missing values:', df.isna().sum().sum()); assert len(df) > 0, 'Feature dataset is empty'"
+          python - <<'PY'
+          import pandas as pd
+          from pathlib import Path
+
+          path = Path(
+              "data/processed/aqi_features.parquet"
+          )
+
+          assert path.exists(), \
+              "Feature dataset was not created."
+
+          df = pd.read_parquet(path)
+
+          assert len(df) > 0, \
+              "Feature dataset is empty."
+
+          print("FEATURE DATASET VERIFIED")
+          print("Shape:", df.shape)
+          print("Columns:")
+          print(df.columns.tolist())
+          print("Missing values:", df.isna().sum().sum())
+          PY
+
+      # ======================================================
+      # 10. SAVE DATA FOR NEXT HOURLY RUN
+      # ======================================================
+
+      - name: Save pipeline data
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqi-pipeline-data
+          path: |
+            data/raw/peshawar_openmeteo_2024_2026.csv
+            data/processed/aqi_features.parquet
+          retention-days: 7
+          overwrite: true
