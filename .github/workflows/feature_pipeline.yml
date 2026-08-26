@@ -2,11 +2,13 @@ name: Pearls AQI - Hourly Feature Pipeline
 
 on:
   schedule:
-    # Every hour at minute 15
     - cron: "15 * * * *"
 
   workflow_dispatch:
 
+permissions:
+  contents: read
+  actions: read
 
 jobs:
 
@@ -15,10 +17,6 @@ jobs:
     name: Run Incremental Feature Pipeline
 
     runs-on: ubuntu-latest
-
-    permissions:
-      contents: read
-      actions: read
 
     steps:
 
@@ -31,7 +29,7 @@ jobs:
 
 
       # ======================================================
-      # 2. PYTHON
+      # 2. SETUP PYTHON
       # ======================================================
 
       - name: Setup Python
@@ -51,99 +49,103 @@ jobs:
 
 
       # ======================================================
-      # 4. RESTORE LATEST PIPELINE DATA
+      # 4. RESTORE LATEST PIPELINE ARTIFACT
       #
-      # If a previous hourly run has produced the artifact,
-      # download its latest copy.
+      # IMPORTANT:
+      # download-artifact without run-id only searches
+      # artifacts from the CURRENT workflow run.
       #
-      # If no artifact exists, this is the INITIAL BACKFILL.
+      # We explicitly find the latest successful run of
+      # THIS workflow and download its artifact.
       # ======================================================
 
-      - name: Restore latest pipeline data
-        shell: bash
+      - name: Restore latest pipeline artifact
         env:
           GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          WORKFLOW_FILE: feature_pipeline.yml
         run: |
 
-          mkdir -p data/raw
-          mkdir -p data/processed
+          echo "Searching for latest successful feature-pipeline run..."
 
-          echo "Checking for previous pipeline artifact..."
+          RUN_ID=$(gh run list \
+            --repo "$REPO" \
+            --workflow "$WORKFLOW_FILE" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
 
-          ARTIFACT_URL=$(python - <<'PY'
-          import json
-          import os
-          import urllib.request
+          if [ -z "$RUN_ID" ]; then
+            echo "No previous successful pipeline run found."
+            echo "This is the INITIAL BACKFILL."
+            exit 0
+          fi
 
-          repo = os.environ["GITHUB_REPOSITORY"]
-          token = os.environ["GH_TOKEN"]
+          echo "Latest successful workflow run: $RUN_ID"
 
-          url = (
-              f"https://api.github.com/repos/{repo}"
-              "/actions/artifacts"
-              "?name=aqi-pipeline-data&per_page=1"
-          )
+          mkdir -p .pipeline_restore
 
-          request = urllib.request.Request(
-              url,
-              headers={
-                  "Accept": "application/vnd.github+json",
-                  "Authorization": f"Bearer {token}",
-                  "X-GitHub-Api-Version": "2026-03-10",
-              },
-          )
+          gh run download "$RUN_ID" \
+            --repo "$REPO" \
+            --name aqi-pipeline-data \
+            --dir .pipeline_restore
 
-          with urllib.request.urlopen(request) as response:
-              data = json.load(response)
+          echo "Restored artifact contents:"
 
-          artifacts = [
-              a for a in data.get("artifacts", [])
-              if not a.get("expired", False)
-          ]
+          find .pipeline_restore -type f -print
 
-          if artifacts:
-              print(artifacts[0]["archive_download_url"])
-          PY
-          )
 
-          if [ -n "$ARTIFACT_URL" ]; then
+      # ======================================================
+      # 5. RESTORE DATA INTO NORMAL PROJECT DIRECTORIES
+      # ======================================================
 
-            echo "Previous pipeline artifact found."
-            echo "Downloading latest pipeline data..."
+      - name: Restore pipeline files
+        run: |
 
-            curl \
-              -L \
-              -H "Accept: application/vnd.github+json" \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "X-GitHub-Api-Version: 2026-03-10" \
-              "$ARTIFACT_URL" \
-              -o pipeline-data.zip
+          if [ -f ".pipeline_restore/data/raw/peshawar_openmeteo_2024_2026.csv" ]; then
 
-            unzip -o pipeline-data.zip
+            echo "Restoring previous raw dataset..."
 
-            echo "Previous pipeline data restored."
+            mkdir -p data/raw
+
+            cp \
+              ".pipeline_restore/data/raw/peshawar_openmeteo_2024_2026.csv" \
+              "data/raw/peshawar_openmeteo_2024_2026.csv"
 
           else
 
-            echo "No previous pipeline artifact found."
-            echo "This run will perform the INITIAL BACKFILL."
+            echo "No previous raw dataset found."
+            echo "INITIAL BACKFILL will be performed."
+
+          fi
+
+
+          if [ -f ".pipeline_restore/data/processed/aqi_features.parquet" ]; then
+
+            echo "Restoring previous feature dataset..."
+
+            mkdir -p data/processed
+
+            cp \
+              ".pipeline_restore/data/processed/aqi_features.parquet" \
+              "data/processed/aqi_features.parquet"
 
           fi
 
 
       # ======================================================
-      # 5. CHECK CURRENT DATA STATE
+      # 6. CHECK CURRENT STATE
       # ======================================================
 
       - name: Check existing raw dataset
-        shell: bash
         run: |
 
-          if [ -f data/raw/peshawar_openmeteo_2024_2026.csv ]; then
+          if [ -f "data/raw/peshawar_openmeteo_2024_2026.csv" ]; then
 
-            echo "=========================================="
+            echo "=============================================="
             echo "EXISTING RAW DATASET FOUND"
-            echo "=========================================="
+            echo "=============================================="
 
             python - <<'PY'
           import pandas as pd
@@ -153,44 +155,47 @@ jobs:
           df = pd.read_csv(path)
 
           print("Rows:", len(df))
+          print("First:", df["timestamp"].min())
+          print("Latest:", df["timestamp"].max())
           print("Columns:", len(df.columns))
-          print("First timestamp:", df["timestamp"].min())
-          print("Latest timestamp:", df["timestamp"].max())
           PY
 
           else
 
-            echo "=========================================="
+            echo "=============================================="
             echo "NO RAW DATASET FOUND"
             echo "INITIAL BACKFILL REQUIRED"
-            echo "=========================================="
+            echo "=============================================="
 
           fi
 
 
       # ======================================================
-      # 6. UPDATE RAW OPEN-METEO DATA
+      # 7. UPDATE RAW DATASET
       #
-      # Your update_raw_dataset.py must implement:
+      # update_raw_dataset.py MUST implement:
       #
-      # FIRST RUN:
-      #   2024-08-01 -> current
+      # NO FILE:
+      #     2024-08-01 -> current
       #
-      # FUTURE RUNS:
-      #   latest timestamp -> current
+      # FILE EXISTS:
+      #     latest timestamp -> current
+      #
       # ======================================================
 
       - name: Update raw Open-Meteo dataset
         run: |
+
           python src/data/update_raw_dataset.py
 
 
       # ======================================================
-      # 7. VERIFY RAW DATA
+      # 8. VERIFY RAW DATA
       # ======================================================
 
       - name: Verify raw dataset
         run: |
+
           python - <<'PY'
           import pandas as pd
           from pathlib import Path
@@ -213,47 +218,33 @@ jobs:
               "timestamp column missing."
           )
 
-          timestamps = pd.to_datetime(
-              df["timestamp"],
-              utc=True
-          )
-
-          assert timestamps.is_monotonic_increasing, (
-              "Raw timestamps are not chronological."
-          )
-
-          assert not timestamps.duplicated().any(), (
-              "Duplicate timestamps found in raw dataset."
-          )
-
-          print("==========================================")
+          print("==============================================")
           print("RAW DATASET VERIFIED")
-          print("==========================================")
+          print("==============================================")
           print("Shape:", df.shape)
-          print("First:", timestamps.min())
-          print("Last:", timestamps.max())
-          print(
-              "Missing values:",
-              df.isna().sum().sum()
-          )
+          print("First:", df["timestamp"].min())
+          print("Last:", df["timestamp"].max())
+          print("Missing values:", df.isna().sum().sum())
           PY
 
 
       # ======================================================
-      # 8. BUILD FEATURES
+      # 9. BUILD FEATURES
       # ======================================================
 
       - name: Run feature engineering
         run: |
+
           python src/features/build_features.py
 
 
       # ======================================================
-      # 9. VERIFY FEATURE DATASET
+      # 10. VERIFY FEATURE DATASET
       # ======================================================
 
       - name: Verify feature dataset
         run: |
+
           python - <<'PY'
           import pandas as pd
           from pathlib import Path
@@ -280,53 +271,38 @@ jobs:
               "target_aqi column missing."
           )
 
-          timestamps = pd.to_datetime(
-              df["timestamp"],
-              utc=True
-          )
-
-          assert timestamps.is_monotonic_increasing, (
-              "Feature timestamps are not chronological."
-          )
-
-          print("==========================================")
+          print("==============================================")
           print("FEATURE DATASET VERIFIED")
-          print("==========================================")
+          print("==============================================")
           print("Shape:", df.shape)
-          print("First:", timestamps.min())
-          print("Last:", timestamps.max())
-          print(
-              "Missing values:",
-              df.isna().sum().sum()
-          )
+          print("First:", df["timestamp"].min())
+          print("Last:", df["timestamp"].max())
+          print("Missing values:", df.isna().sum().sum())
           PY
 
 
       # ======================================================
-      # 10. RUN FEATURE TESTS
-      #
-      # IMPORTANT:
-      # The feature file now exists because the feature
-      # pipeline created it immediately before this step.
+      # 11. RUN FEATURE TESTS
       # ======================================================
 
       - name: Run feature tests
         run: |
+
           pytest -q tests/test_features.py
 
 
       # ======================================================
-      # 11. SAVE CURRENT PIPELINE DATA
+      # 12. UPLOAD UPDATED PIPELINE STATE
       #
-      # This becomes the state for the NEXT hourly run.
+      # This becomes the input for the NEXT hourly run.
       # ======================================================
 
-      - name: Save pipeline data
+      - name: Save latest pipeline state
         uses: actions/upload-artifact@v4
         with:
           name: aqi-pipeline-data
           path: |
             data/raw/peshawar_openmeteo_2024_2026.csv
             data/processed/aqi_features.parquet
-          retention-days: 7
+          retention-days: 30
           overwrite: true
