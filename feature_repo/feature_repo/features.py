@@ -39,7 +39,7 @@ aqi_features = FeatureView(
     entities=[aqi_entity],
     ttl=timedelta(days=3650),
     schema=[
-        Field(name="location_id", dtype=String),
+        
         # Weather
         Field(name="temperature_2m", dtype=Float32),
         Field(name="relative_humidity_2m", dtype=Int64),
@@ -56,12 +56,16 @@ aqi_features = FeatureView(
         Field(name="sulphur_dioxide", dtype=Float32),
         Field(name="ozone", dtype=Float32),
 
+        Field(name="us_aqi", dtype=Float32),
+
+
         # Time
         Field(name="hour", dtype=Int64),
         Field(name="day_of_week", dtype=Int64),
         Field(name="day_of_month", dtype=Int64),
         Field(name="month", dtype=Int64),
         Field(name="is_weekend", dtype=Int64),
+    
 
         # AQI lags
         Field(name="aqi_lag_1", dtype=Float32),
@@ -141,6 +145,8 @@ aqi_features = FeatureView(
 
         Field(name="pm10_change_1h", dtype=Float32),
         Field(name="pm10_change_24h", dtype=Float32),
+
+        Field(name="target_aqi", dtype=Float32),
     ],
     source=aqi_source,
 )
