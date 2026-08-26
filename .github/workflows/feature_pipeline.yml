@@ -7,12 +7,18 @@ on:
 
   workflow_dispatch:
 
+
 jobs:
+
   feature_pipeline:
 
     name: Run Incremental Feature Pipeline
 
     runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      actions: read
 
     steps:
 
@@ -23,6 +29,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
+
       # ======================================================
       # 2. PYTHON
       # ======================================================
@@ -31,6 +38,7 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
 
       # ======================================================
       # 3. INSTALL DEPENDENCIES
@@ -41,53 +49,144 @@ jobs:
           python -m pip install --upgrade pip
           pip install pandas pyarrow requests pytest
 
-      # ======================================================
-      # 4. RESTORE PREVIOUS DATA
-      # ======================================================
-
-      - name: Restore previous pipeline data
-        uses: actions/download-artifact@v4
-        with:
-          name: aqi-pipeline-data
-          path: .
-        continue-on-error: true
 
       # ======================================================
-      # 5. SHOW RESTORED FILES
+      # 4. RESTORE LATEST PIPELINE DATA
+      #
+      # If a previous hourly run has produced the artifact,
+      # download its latest copy.
+      #
+      # If no artifact exists, this is the INITIAL BACKFILL.
+      # ======================================================
+
+      - name: Restore latest pipeline data
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          mkdir -p data/raw
+          mkdir -p data/processed
+
+          echo "Checking for previous pipeline artifact..."
+
+          ARTIFACT_URL=$(python - <<'PY'
+          import json
+          import os
+          import urllib.request
+
+          repo = os.environ["GITHUB_REPOSITORY"]
+          token = os.environ["GH_TOKEN"]
+
+          url = (
+              f"https://api.github.com/repos/{repo}"
+              "/actions/artifacts"
+              "?name=aqi-pipeline-data&per_page=1"
+          )
+
+          request = urllib.request.Request(
+              url,
+              headers={
+                  "Accept": "application/vnd.github+json",
+                  "Authorization": f"Bearer {token}",
+                  "X-GitHub-Api-Version": "2026-03-10",
+              },
+          )
+
+          with urllib.request.urlopen(request) as response:
+              data = json.load(response)
+
+          artifacts = [
+              a for a in data.get("artifacts", [])
+              if not a.get("expired", False)
+          ]
+
+          if artifacts:
+              print(artifacts[0]["archive_download_url"])
+          PY
+          )
+
+          if [ -n "$ARTIFACT_URL" ]; then
+
+            echo "Previous pipeline artifact found."
+            echo "Downloading latest pipeline data..."
+
+            curl \
+              -L \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "$ARTIFACT_URL" \
+              -o pipeline-data.zip
+
+            unzip -o pipeline-data.zip
+
+            echo "Previous pipeline data restored."
+
+          else
+
+            echo "No previous pipeline artifact found."
+            echo "This run will perform the INITIAL BACKFILL."
+
+          fi
+
+
+      # ======================================================
+      # 5. CHECK CURRENT DATA STATE
       # ======================================================
 
       - name: Check existing raw dataset
+        shell: bash
         run: |
+
           if [ -f data/raw/peshawar_openmeteo_2024_2026.csv ]; then
-            echo "Existing raw dataset found."
-            python -c "import pandas as pd; df=pd.read_csv('data/raw/peshawar_openmeteo_2024_2026.csv'); print('Rows:', len(df)); print('Latest:', df['timestamp'].max())"
+
+            echo "=========================================="
+            echo "EXISTING RAW DATASET FOUND"
+            echo "=========================================="
+
+            python - <<'PY'
+          import pandas as pd
+
+          path = "data/raw/peshawar_openmeteo_2024_2026.csv"
+
+          df = pd.read_csv(path)
+
+          print("Rows:", len(df))
+          print("Columns:", len(df.columns))
+          print("First timestamp:", df["timestamp"].min())
+          print("Latest timestamp:", df["timestamp"].max())
+          PY
+
           else
-            echo "No previous raw dataset found."
-            echo "This will be the INITIAL BACKFILL."
+
+            echo "=========================================="
+            echo "NO RAW DATASET FOUND"
+            echo "INITIAL BACKFILL REQUIRED"
+            echo "=========================================="
+
           fi
 
+
       # ======================================================
-      # 6. UPDATE RAW DATA
+      # 6. UPDATE RAW OPEN-METEO DATA
+      #
+      # Your update_raw_dataset.py must implement:
+      #
+      # FIRST RUN:
+      #   2024-08-01 -> current
+      #
+      # FUTURE RUNS:
+      #   latest timestamp -> current
       # ======================================================
 
       - name: Update raw Open-Meteo dataset
         run: |
           python src/data/update_raw_dataset.py
 
-      # ======================================================
-      # 7. BUILD FEATURES
-      # ======================================================
-
-      - name: Run feature engineering
-        run: |
-          python src/features/build_features.py
-      
-      - name: Run feature tests
-        run: |
-          pytest -q tests/test_features.py
 
       # ======================================================
-      # 8. VERIFY RAW DATA
+      # 7. VERIFY RAW DATA
       # ======================================================
 
       - name: Verify raw dataset
@@ -100,26 +199,57 @@ jobs:
               "data/raw/peshawar_openmeteo_2024_2026.csv"
           )
 
-          assert path.exists(), \
+          assert path.exists(), (
               "Raw dataset was not created."
+          )
 
           df = pd.read_csv(path)
 
-          assert len(df) > 0, \
+          assert len(df) > 0, (
               "Raw dataset is empty."
+          )
 
-          assert "timestamp" in df.columns, \
+          assert "timestamp" in df.columns, (
               "timestamp column missing."
+          )
 
+          timestamps = pd.to_datetime(
+              df["timestamp"],
+              utc=True
+          )
+
+          assert timestamps.is_monotonic_increasing, (
+              "Raw timestamps are not chronological."
+          )
+
+          assert not timestamps.duplicated().any(), (
+              "Duplicate timestamps found in raw dataset."
+          )
+
+          print("==========================================")
           print("RAW DATASET VERIFIED")
+          print("==========================================")
           print("Shape:", df.shape)
-          print("First:", df["timestamp"].min())
-          print("Last:", df["timestamp"].max())
-          print("Missing values:", df.isna().sum().sum())
+          print("First:", timestamps.min())
+          print("Last:", timestamps.max())
+          print(
+              "Missing values:",
+              df.isna().sum().sum()
+          )
           PY
 
+
       # ======================================================
-      # 9. VERIFY FEATURES
+      # 8. BUILD FEATURES
+      # ======================================================
+
+      - name: Run feature engineering
+        run: |
+          python src/features/build_features.py
+
+
+      # ======================================================
+      # 9. VERIFY FEATURE DATASET
       # ======================================================
 
       - name: Verify feature dataset
@@ -132,23 +262,63 @@ jobs:
               "data/processed/aqi_features.parquet"
           )
 
-          assert path.exists(), \
+          assert path.exists(), (
               "Feature dataset was not created."
+          )
 
           df = pd.read_parquet(path)
 
-          assert len(df) > 0, \
+          assert len(df) > 0, (
               "Feature dataset is empty."
+          )
 
+          assert "timestamp" in df.columns, (
+              "timestamp column missing."
+          )
+
+          assert "target_aqi" in df.columns, (
+              "target_aqi column missing."
+          )
+
+          timestamps = pd.to_datetime(
+              df["timestamp"],
+              utc=True
+          )
+
+          assert timestamps.is_monotonic_increasing, (
+              "Feature timestamps are not chronological."
+          )
+
+          print("==========================================")
           print("FEATURE DATASET VERIFIED")
+          print("==========================================")
           print("Shape:", df.shape)
-          print("Columns:")
-          print(df.columns.tolist())
-          print("Missing values:", df.isna().sum().sum())
+          print("First:", timestamps.min())
+          print("Last:", timestamps.max())
+          print(
+              "Missing values:",
+              df.isna().sum().sum()
+          )
           PY
 
+
       # ======================================================
-      # 10. SAVE DATA FOR NEXT HOURLY RUN
+      # 10. RUN FEATURE TESTS
+      #
+      # IMPORTANT:
+      # The feature file now exists because the feature
+      # pipeline created it immediately before this step.
+      # ======================================================
+
+      - name: Run feature tests
+        run: |
+          pytest -q tests/test_features.py
+
+
+      # ======================================================
+      # 11. SAVE CURRENT PIPELINE DATA
+      #
+      # This becomes the state for the NEXT hourly run.
       # ======================================================
 
       - name: Save pipeline data
