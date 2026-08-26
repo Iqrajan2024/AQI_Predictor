@@ -2,7 +2,6 @@ name: Pearls AQI - Daily Training Pipeline
 
 on:
   schedule:
-    # Every day at 02:30 UTC
     - cron: "30 2 * * *"
 
   workflow_dispatch:
@@ -24,7 +23,7 @@ jobs:
 
 
       # ======================================================
-      # 2. PYTHON
+      # 2. SETUP PYTHON
       # ======================================================
 
       - name: Setup Python
@@ -70,8 +69,7 @@ jobs:
             exit 1
           fi
 
-          echo "Latest successful feature pipeline run:"
-          echo "$RUN_ID"
+          echo "Latest feature pipeline run: $RUN_ID"
 
           echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
@@ -88,7 +86,7 @@ jobs:
 
         run: |
 
-          echo "Downloading artifact from feature pipeline run:"
+          echo "Downloading artifact from feature run:"
           echo "$FEATURE_RUN_ID"
 
           mkdir -p .feature_restore
@@ -99,7 +97,7 @@ jobs:
             --dir .feature_restore
 
           echo ""
-          echo "Downloaded artifact contents:"
+          echo "Downloaded artifact:"
           find .feature_restore -type f -print
 
 
@@ -112,9 +110,7 @@ jobs:
 
           echo "Restoring feature dataset..."
 
-          mkdir -p data/processed
-
-          FEATURE_SOURCE=".feature_restore/data/processed/aqi_features.parquet"
+          FEATURE_SOURCE=".feature_restore/processed/aqi_features.parquet"
 
           if [ ! -f "$FEATURE_SOURCE" ]; then
             echo "ERROR: Feature dataset not found."
@@ -124,11 +120,14 @@ jobs:
             exit 1
           fi
 
+          mkdir -p data/processed
+
           cp "$FEATURE_SOURCE" \
              "data/processed/aqi_features.parquet"
 
           echo ""
-          echo "Feature dataset restored:"
+          echo "Feature dataset restored successfully."
+
           ls -lh data/processed/aqi_features.parquet
 
 
@@ -157,17 +156,9 @@ jobs:
               "Feature dataset is empty."
           )
 
-          assert "timestamp" in df.columns, (
-              "timestamp column missing."
-          )
-
-          assert "us_aqi" in df.columns, (
-              "us_aqi column missing."
-          )
-
-          assert "target_aqi" in df.columns, (
-              "target_aqi column missing."
-          )
+          assert "timestamp" in df.columns
+          assert "us_aqi" in df.columns
+          assert "target_aqi" in df.columns
 
           print("======================================")
           print("FEATURE DATASET READY FOR TRAINING")
@@ -181,7 +172,7 @@ jobs:
 
 
       # ======================================================
-      # 8. RUN DAILY MODEL TRAINING
+      # 8. RUN MODEL TRAINING
       # ======================================================
 
       - name: Run daily training pipeline
