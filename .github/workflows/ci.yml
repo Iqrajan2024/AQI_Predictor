@@ -1,7 +1,6 @@
 name: Pearls AQI - CI
 
 on:
-
   push:
     branches:
       - main
@@ -18,8 +17,7 @@ on:
 jobs:
 
   test:
-
-    name: Test AQI Project
+    name: Test Feature Pipeline
 
     runs-on: ubuntu-latest
 
@@ -50,27 +48,59 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-
-          pip install pandas
-          pip install pyarrow
-          pip install requests
-          pip install pytest
-          pip install feast
+          pip install pandas pyarrow requests pytest
 
 
       # ======================================================
-      # 4. VERIFY FEAST INSTALLATION
+      # 4. CREATE/UPDATE RAW DATASET
+      #
+      # CI needs raw data before feature engineering.
       # ======================================================
 
-      - name: Verify Feast installation
+      - name: Create raw dataset
         run: |
-          python -c "import feast; print('Feast version:', feast.__version__)"
+          python src/data/update_raw_dataset.py
 
 
       # ======================================================
-      # 5. RUN ALL TESTS
+      # 5. BUILD FEATURE DATASET
+      #
+      # This creates:
+      #
+      # data/processed/aqi_features.parquet
       # ======================================================
 
-      - name: Run tests
+      - name: Build feature dataset
         run: |
-          pytest -q
+          python src/features/build_features.py
+
+
+      # ======================================================
+      # 6. VERIFY FEATURE FILE EXISTS
+      # ======================================================
+
+      - name: Verify feature dataset exists
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("data/processed/aqi_features.parquet")
+
+          print("Checking:", path.resolve())
+
+          assert path.exists(), (
+              f"Feature dataset was not created: {path.resolve()}"
+          )
+
+          print("Feature dataset exists.")
+          print("Size:", path.stat().st_size, "bytes")
+          PY
+
+
+      # ======================================================
+      # 7. RUN FEATURE TESTS
+      # ======================================================
+
+      - name: Run feature tests
+        run: |
+          pytest tests/test_features.py -v
