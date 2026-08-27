@@ -1,10 +1,14 @@
 from pathlib import Path
 
-import pandas as pd
 from feast import FeatureStore
 
 
-FEATURE_REPO = Path(__file__).resolve().parent
+FEATURE_REPO = (
+    Path(__file__).resolve().parents[1]
+    / "feature_repo"
+    / "feature_repo"
+)
+
 
 MODEL_FEATURES = [
     "temperature_2m",
@@ -13,17 +17,21 @@ MODEL_FEATURES = [
     "precipitation",
     "wind_speed_10m",
     "wind_direction_10m",
+
     "pm2_5",
     "pm10",
     "carbon_monoxide",
     "nitrogen_dioxide",
     "sulphur_dioxide",
     "ozone",
+    
+
     "hour",
     "day_of_week",
     "day_of_month",
     "month",
     "is_weekend",
+
     "aqi_lag_1",
     "aqi_lag_3",
     "aqi_lag_6",
@@ -31,130 +39,109 @@ MODEL_FEATURES = [
     "aqi_lag_24",
     "aqi_lag_48",
     "aqi_lag_72",
+
     "pm2_5_lag_1",
     "pm2_5_lag_3",
     "pm2_5_lag_6",
     "pm2_5_lag_24",
+
     "pm10_lag_1",
     "pm10_lag_3",
     "pm10_lag_6",
     "pm10_lag_24",
+
     "carbon_monoxide_lag_1",
     "carbon_monoxide_lag_3",
     "carbon_monoxide_lag_6",
     "carbon_monoxide_lag_24",
+
     "nitrogen_dioxide_lag_1",
     "nitrogen_dioxide_lag_3",
     "nitrogen_dioxide_lag_6",
     "nitrogen_dioxide_lag_24",
+
     "sulphur_dioxide_lag_1",
     "sulphur_dioxide_lag_3",
     "sulphur_dioxide_lag_6",
     "sulphur_dioxide_lag_24",
+
     "ozone_lag_1",
     "ozone_lag_3",
     "ozone_lag_6",
     "ozone_lag_24",
+
     "aqi_3h_mean",
     "aqi_6h_mean",
     "aqi_12h_mean",
     "aqi_24h_mean",
+
     "pm2_5_3h_mean",
     "pm2_5_6h_mean",
     "pm2_5_24h_mean",
+
     "pm10_3h_mean",
     "pm10_6h_mean",
     "pm10_24h_mean",
+
     "carbon_monoxide_24h_mean",
     "nitrogen_dioxide_24h_mean",
     "sulphur_dioxide_24h_mean",
     "ozone_24h_mean",
+
     "aqi_change_1h",
     "aqi_change_3h",
     "aqi_change_6h",
     "aqi_change_24h",
+
     "pm2_5_change_1h",
     "pm2_5_change_24h",
+
     "pm10_change_1h",
     "pm10_change_24h",
 ]
 
-assert len(MODEL_FEATURES) == 70
 
+def test_feast_online_store_contains_latest_features():
 
-def test_feature_store_config_exists():
-    config_file = FEATURE_REPO / "feature_store.yaml"
-
-    assert config_file.exists(), (
-        f"Feast configuration not found: {config_file}"
-    )
-
-
-def test_feature_store_loads():
     store = FeatureStore(
         repo_path=str(FEATURE_REPO)
     )
 
-    assert store is not None
+    assert len(MODEL_FEATURES) == 70
 
-
-def test_aqi_feature_view_exists():
-    store = FeatureStore(
-        repo_path=str(FEATURE_REPO)
-    )
-
-    views = store.list_feature_views()
-
-    names = [
-        view.name
-        for view in views
+    feature_refs = [
+        f"aqi_features:{feature}"
+        for feature in MODEL_FEATURES
     ]
 
-    assert "aqi_features" in names
+    result = store.get_online_features(
+        features=feature_refs,
+        entity_rows=[
+            {
+                "location_id": "peshawar"
+            }
+        ],
+    ).to_dict()
 
+    assert "location_id" in result
 
-def test_aqi_model_feature_service_exists():
-    store = FeatureStore(
-        repo_path=str(FEATURE_REPO)
-    )
+    assert result["location_id"][0] == "peshawar"
 
-    services = store.list_feature_services()
+    for feature in MODEL_FEATURES:
 
-    names = [
-        service.name
-        for service in services
-    ]
+        assert feature in result, (
+            f"Missing Feast feature: {feature}"
+        )
 
-    assert "aqi_model_features" in names
+        assert result[feature][0] is not None, (
+            f"Feast feature is NULL: {feature}"
+        )
 
+    
 
-def test_feature_dataset_contains_required_columns():
-
-    path = (
-        FEATURE_REPO
-        / "../../data/processed/aqi_features.parquet"
-    ).resolve()
-
-    assert path.exists(), (
-        f"Feature dataset not found: {path}"
-    )
-
-    df = pd.read_parquet(path)
-
-    required = set(
-        MODEL_FEATURES
-        + [
-            "location_id",
-            "timestamp",
-            "us_aqi",
-            "target_aqi",
-        ]
-    )
-
-    missing = required.difference(
-        df.columns
-    )
-
-    assert not missing, (
-        f"Missing columns: {sorted(missing)}"
-    )
+    print("==========================================")
+    print("FEAST ONLINE STORE VERIFIED")
+    print("==========================================")
+    print("Location:", result["location_id"][0])
+    print("Model features:", len(MODEL_FEATURES))
+    

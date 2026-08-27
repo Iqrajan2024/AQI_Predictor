@@ -186,6 +186,9 @@ def main():
 
     print("Raw dataset shape:", df.shape)
 
+    # Feast entity
+    df["location_id"] = "peshawar"
+
     # --------------------------------------------------------
     # TIMESTAMP
     # --------------------------------------------------------

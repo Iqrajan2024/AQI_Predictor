@@ -20,69 +20,46 @@ jobs:
 
     steps:
 
-      # ======================================================
-      # 1. CHECKOUT
-      # ======================================================
-
       - name: Checkout repository
         uses: actions/checkout@v6
-
-
-      # ======================================================
-      # 2. SETUP PYTHON
-      # ======================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-
-      # ======================================================
-      # 3. INSTALL DEPENDENCIES
-      # ======================================================
-
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow requests pytest
-
+          pip install pandas pyarrow requests pytest "feast[duckdb]" duckdb
 
       # ======================================================
-      # 4. RESTORE LATEST PIPELINE ARTIFACT
-      #
-      # IMPORTANT:
-      # download-artifact without run-id only searches
-      # artifacts from the CURRENT workflow run.
-      #
-      # We explicitly find the latest successful run of
-      # THIS workflow and download its artifact.
+      # RESTORE PREVIOUS PIPELINE STATE
       # ======================================================
 
       - name: Restore latest pipeline artifact
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          WORKFLOW_FILE: feature_pipeline.yml
-        run: |
 
-          echo "Searching for latest successful feature-pipeline run..."
+        run: |
 
           RUN_ID=$(gh run list \
             --repo "$REPO" \
-            --workflow "$WORKFLOW_FILE" \
+            --workflow "feature_pipeline.yml" \
+            --branch main \
             --status success \
             --limit 1 \
             --json databaseId \
             --jq '.[0].databaseId')
 
           if [ -z "$RUN_ID" ]; then
-            echo "No previous successful pipeline run found."
-            echo "This is the INITIAL BACKFILL."
+            echo "No previous successful feature run."
+            echo "Initial backfill will be performed."
             exit 0
           fi
 
-          echo "Latest successful workflow run: $RUN_ID"
+          echo "Previous feature run: $RUN_ID"
 
           mkdir -p .pipeline_restore
 
@@ -91,254 +68,303 @@ jobs:
             --name aqi-pipeline-data \
             --dir .pipeline_restore
 
-          echo "Restored artifact contents:"
-
           find .pipeline_restore -type f -print
 
-
       # ======================================================
-      # 5. RESTORE DATA INTO NORMAL PROJECT DIRECTORIES
+      # RESTORE DATA
       # ======================================================
 
       - name: Restore pipeline files
         run: |
 
+          mkdir -p data/raw
+          mkdir -p data/processed
+          mkdir -p feature_repo/feature_repo/data
+
           if [ -f ".pipeline_restore/data/raw/peshawar_openmeteo_2024_2026.csv" ]; then
-
-            echo "Restoring previous raw dataset..."
-
-            mkdir -p data/raw
-
             cp \
               ".pipeline_restore/data/raw/peshawar_openmeteo_2024_2026.csv" \
               "data/raw/peshawar_openmeteo_2024_2026.csv"
-
-          else
-
-            echo "No previous raw dataset found."
-            echo "INITIAL BACKFILL will be performed."
-
           fi
 
-
           if [ -f ".pipeline_restore/data/processed/aqi_features.parquet" ]; then
-
-            echo "Restoring previous feature dataset..."
-
-            mkdir -p data/processed
-
             cp \
               ".pipeline_restore/data/processed/aqi_features.parquet" \
               "data/processed/aqi_features.parquet"
-
           fi
 
-
-      # ======================================================
-      # 6. CHECK CURRENT STATE
-      # ======================================================
-
-      - name: Check existing raw dataset
-        run: |
-
-          if [ -f "data/raw/peshawar_openmeteo_2024_2026.csv" ]; then
-
-            echo "=============================================="
-            echo "EXISTING RAW DATASET FOUND"
-            echo "=============================================="
-
-            python - <<'PY'
-          import pandas as pd
-
-          path = "data/raw/peshawar_openmeteo_2024_2026.csv"
-
-          df = pd.read_csv(path)
-
-          print("Rows:", len(df))
-          print("First:", df["timestamp"].min())
-          print("Latest:", df["timestamp"].max())
-          print("Columns:", len(df.columns))
-          PY
-
-          else
-
-            echo "=============================================="
-            echo "NO RAW DATASET FOUND"
-            echo "INITIAL BACKFILL REQUIRED"
-            echo "=============================================="
-
+          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/registry.db" ]; then
+            cp \
+              ".pipeline_restore/feature_repo/feature_repo/data/registry.db" \
+              "feature_repo/feature_repo/data/registry.db"
           fi
 
+          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" ]; then
+            cp \
+              ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" \
+              "feature_repo/feature_repo/data/online_store.db"
+          fi
 
       # ======================================================
-      # 7. UPDATE RAW DATASET
-      #
-      # update_raw_dataset.py MUST implement:
-      #
-      # NO FILE:
-      #     2024-08-01 -> current
-      #
-      # FILE EXISTS:
-      #     latest timestamp -> current
-      #
+      # UPDATE RAW
       # ======================================================
 
       - name: Update raw Open-Meteo dataset
         run: |
-
           python src/data/update_raw_dataset.py
 
-
       # ======================================================
-      # 8. VERIFY RAW DATA
+      # VERIFY RAW
       # ======================================================
 
       - name: Verify raw dataset
         run: |
 
           python - <<'PY'
-          import pandas as pd
           from pathlib import Path
+          import pandas as pd
 
           path = Path(
               "data/raw/peshawar_openmeteo_2024_2026.csv"
           )
 
-          assert path.exists(), (
-              "Raw dataset was not created."
-          )
-
+          assert path.exists()
           df = pd.read_csv(path)
 
-          assert len(df) > 0, (
-              "Raw dataset is empty."
-          )
+          assert not df.empty
+          assert "timestamp" in df.columns
 
-          assert "timestamp" in df.columns, (
-              "timestamp column missing."
-          )
-
-          print("==============================================")
           print("RAW DATASET VERIFIED")
-          print("==============================================")
           print("Shape:", df.shape)
           print("First:", df["timestamp"].min())
           print("Last:", df["timestamp"].max())
-          print("Missing values:", df.isna().sum().sum())
           PY
 
-
       # ======================================================
-      # 9. BUILD FEATURES
+      # BUILD FEATURES
       # ======================================================
 
       - name: Run feature engineering
         run: |
-
           python src/features/build_features.py
 
-      - name: Install Feast
-        run: |
-          pip install feast
-      
-      - name: Apply Feast feature definitions
-        run: |
-          cd feature_repo/feature_repo
-          feast apply
-        
-      - name: Materialize latest features into Feast
-        run: |
-          cd feature_repo/feature_repo
-
-          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
-
-          feast materialize-incremental "$CURRENT_TIME"
-
-      - name: Verify Feast online store
-        run: |
-          python - <<'PY'
-          from feast import FeatureStore
-
-          store = FeatureStore(
-              repo_path="feature_repo/feature_repo"
-          )
-
-          features = [
-              "aqi_features:temperature_2m",
-              "aqi_features:pm2_5",
-              "aqi_features:us_aqi",
-          ]
-
-          result = store.get_online_features(
-              features=features,
-              entity_rows=[
-                  {"location_id": "peshawar"}
-              ],
-          ).to_dict()
-
-          print("FEAST ONLINE STORE VERIFIED")
-          print(result)
-
-          assert result["location_id"][0] == "peshawar"
-          assert result["us_aqi"][0] is not None
-          PY
       # ======================================================
-      # 10. VERIFY FEATURE DATASET
+      # VERIFY FEATURE DATASET
       # ======================================================
 
       - name: Verify feature dataset
         run: |
 
           python - <<'PY'
-          import pandas as pd
           from pathlib import Path
+          import pandas as pd
 
           path = Path(
               "data/processed/aqi_features.parquet"
           )
 
-          assert path.exists(), (
-              "Feature dataset was not created."
-          )
+          assert path.exists()
 
           df = pd.read_parquet(path)
 
-          assert len(df) > 0, (
-              "Feature dataset is empty."
-          )
+          required = [
+              "location_id",
+              "timestamp",
+              "us_aqi",
+              "target_aqi",
+          ]
 
-          assert "timestamp" in df.columns, (
-              "timestamp column missing."
-          )
+          for col in required:
+              assert col in df.columns, col
 
-          assert "target_aqi" in df.columns, (
-              "target_aqi column missing."
-          )
+          assert not df.empty
 
-          print("==============================================")
+          assert df["location_id"].notna().all()
+          assert df["us_aqi"].notna().all()
+
           print("FEATURE DATASET VERIFIED")
-          print("==============================================")
           print("Shape:", df.shape)
+          print("Columns:", len(df.columns))
           print("First:", df["timestamp"].min())
           print("Last:", df["timestamp"].max())
-          print("Missing values:", df.isna().sum().sum())
+          print("Missing:", df.isna().sum().sum())
           PY
 
+      # ======================================================
+      # FEAST APPLY
+      # ======================================================
+
+      - name: Apply Feast definitions
+        working-directory: feature_repo/feature_repo
+        run: |
+          feast apply
 
       # ======================================================
-      # 11. RUN FEATURE TESTS
+      # FEAST MATERIALIZE
       # ======================================================
 
-      - name: Run feature tests
+      - name: Materialize Feast online store
+        working-directory: feature_repo/feature_repo
         run: |
 
-          pytest -q tests/test_features.py
+          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
 
+          feast materialize-incremental \
+            "$CURRENT_TIME"
 
       # ======================================================
-      # 12. UPLOAD UPDATED PIPELINE STATE
-      #
-      # This becomes the input for the NEXT hourly run.
+      # VERIFY ONLINE STORE
+      # ======================================================
+      
+      - name: Verify Feast online store
+        run: |
+
+          python - <<'PY'
+
+          from feast import FeatureStore
+
+          store = FeatureStore(
+              repo_path="feature_repo/feature_repo"
+          )
+
+          FEATURES = [
+              "temperature_2m",
+              "relative_humidity_2m",
+              "pressure_msl",
+              "precipitation",
+              "wind_speed_10m",
+              "wind_direction_10m",
+
+              "pm2_5",
+              "pm10",
+              "carbon_monoxide",
+              "nitrogen_dioxide",
+              "sulphur_dioxide",
+              "ozone",
+              "us_aqi",
+
+              "hour",
+              "day_of_week",
+              "day_of_month",
+              "month",
+              "is_weekend",
+
+              "aqi_lag_1",
+              "aqi_lag_3",
+              "aqi_lag_6",
+              "aqi_lag_12",
+              "aqi_lag_24",
+              "aqi_lag_48",
+              "aqi_lag_72",
+
+              "pm2_5_lag_1",
+              "pm2_5_lag_3",
+              "pm2_5_lag_6",
+              "pm2_5_lag_24",
+
+              "pm10_lag_1",
+              "pm10_lag_3",
+              "pm10_lag_6",
+              "pm10_lag_24",
+
+              "carbon_monoxide_lag_1",
+              "carbon_monoxide_lag_3",
+              "carbon_monoxide_lag_6",
+              "carbon_monoxide_lag_24",
+
+              "nitrogen_dioxide_lag_1",
+              "nitrogen_dioxide_lag_3",
+              "nitrogen_dioxide_lag_6",
+              "nitrogen_dioxide_lag_24",
+
+              "sulphur_dioxide_lag_1",
+              "sulphur_dioxide_lag_3",
+              "sulphur_dioxide_lag_6",
+              "sulphur_dioxide_lag_24",
+
+              "ozone_lag_1",
+              "ozone_lag_3",
+              "ozone_lag_6",
+              "ozone_lag_24",
+
+              "aqi_3h_mean",
+              "aqi_6h_mean",
+              "aqi_12h_mean",
+              "aqi_24h_mean",
+
+              "pm2_5_3h_mean",
+              "pm2_5_6h_mean",
+              "pm2_5_24h_mean",
+
+              "pm10_3h_mean",
+              "pm10_6h_mean",
+              "pm10_24h_mean",
+
+              "carbon_monoxide_24h_mean",
+              "nitrogen_dioxide_24h_mean",
+              "sulphur_dioxide_24h_mean",
+              "ozone_24h_mean",
+
+              "aqi_change_1h",
+              "aqi_change_3h",
+              "aqi_change_6h",
+              "aqi_change_24h",
+
+              "pm2_5_change_1h",
+              "pm2_5_change_24h",
+
+              "pm10_change_1h",
+              "pm10_change_24h",
+          ]
+
+          assert len(FEATURES) == 70
+
+          feature_refs = [
+              f"aqi_features:{feature}"
+              for feature in FEATURES
+          ]
+
+          result = store.get_online_features(
+              features=feature_refs,
+              entity_rows=[
+                  {
+                      "location_id": "peshawar"
+                  }
+              ],
+          ).to_dict()
+
+          assert result["location_id"][0] == "peshawar"
+
+          for feature in FEATURES:
+
+              assert feature in result, (
+                  f"Missing online feature: {feature}"
+              )
+
+              assert result[feature][0] is not None, (
+                  f"NULL online feature: {feature}"
+              )
+
+          assert result["us_aqi"][0] is not None
+
+          print("======================================")
+          print("FEAST ONLINE STORE VERIFIED")
+          print("======================================")
+          print("Features:", len(FEATURES))
+          print("us_aqi:", result["us_aqi"][0])
+
+          PY
+
+      # ======================================================
+      # FEAST TESTS
+      # ======================================================
+
+      - name: Run Feast tests
+        run: |
+          pytest -q feature_repo/feature_repo/test_feature_store.py
+
+      # ======================================================
+      # SAVE PIPELINE STATE
       # ======================================================
 
       - name: Save pipeline data
@@ -352,3 +378,4 @@ jobs:
             feature_repo/feature_repo/data/online_store.db
           retention-days: 7
           overwrite: true
+          if-no-files-found: error

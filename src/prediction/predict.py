@@ -1,51 +1,28 @@
 """
-============================================================
 PEARLS AQI PREDICTOR
 NEXT 3-DAY FORECAST PIPELINE
-============================================================
 
 Architecture:
 
-    Open-Meteo
-        |
-        +-- Weather forecast
-        +-- Air-quality forecast
-        |
-        v
-    Historical state / feature context
-        |
-        v
-    Feast Feature Store
-        |
-        v
-    70 model features
-        |
-        v
-    MLflow Champion XGBoost
-        |
-        v
-    Hourly AQI predictions
-        |
-        v
-    NEXT 3 CALENDAR DAYS
-        |
-        +-- Hourly forecast CSV
-        +-- Daily average CSV
-
-Model:
-    MLflow Model Registry
-    Pearls_AQI_XGBoost@champion
-
-Feature Store:
-    Feast
-    feature_repo/feature_repo
-
-Location:
-    Peshawar, Pakistan
-
-Output:
-    data/predictions/latest_forecast.csv
-    data/predictions/latest_daily_forecast.csv
+Open-Meteo
+    |
+    +-- Weather forecast
+    +-- Air-quality forecast
+    |
+    v
+Feast historical context
+    |
+    v
+70 model features
+    |
+    v
+MLflow @champion
+    |
+    v
+72 hourly recursive predictions
+    |
+    v
+3 daily averages
 """
 
 from pathlib import Path
@@ -55,17 +32,19 @@ import mlflow
 import numpy as np
 import pandas as pd
 import requests
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from feast import FeatureStore
 
 
 # ============================================================
-# PROJECT PATHS
+# PATHS
 # ============================================================
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = (
+    Path(__file__)
+    .resolve()
+    .parents[2]
+)
 
 FEATURE_REPO = (
     PROJECT_ROOT
@@ -94,25 +73,24 @@ FEATURE_PREDICTION_FILE = (
     / "latest_forecast_features.csv"
 )
 
+
 # ============================================================
-# MLflow
+# MLFLOW
 # ============================================================
 
-MLFLOW_TRACKING_URI = (
-    "http://127.0.0.1:5000"
+MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
+MLFLOW_MODEL_ALIAS = "champion"
+
+MLFLOW_DATABASE = (
+    PROJECT_ROOT / "mlflow.db"
 )
+
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 MLFLOW_MODEL_URI = (
-    "models:/Pearls_AQI_XGBoost@champion"
+    f"models:/{MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}"
 )
-
-
-# ============================================================
-# FEAST
-# ============================================================
-
-FEAST_FEATURE_SERVICE = "aqi_features"
-
 
 # ============================================================
 # LOCATION
@@ -125,7 +103,7 @@ LONGITUDE = 71.5785
 
 
 # ============================================================
-# OPEN-METEO ENDPOINTS
+# API
 # ============================================================
 
 WEATHER_URL = (
@@ -138,7 +116,7 @@ AIR_QUALITY_URL = (
 
 
 # ============================================================
-# FORECAST CONFIGURATION
+# FORECAST
 # ============================================================
 
 HISTORY_HOURS = 96
@@ -147,20 +125,12 @@ FORECAST_DAYS = 3
 
 FORECAST_HOURS = 72
 
-# Open-Meteo forecast starts from the current hour.
-# We need enough hours to reach midnight of the
-# third NEXT calendar day.
-API_FORECAST_HOURS = 24 + FORECAST_HOURS
 
 # ============================================================
 # 70 MODEL FEATURES
 # ============================================================
 
 FEATURE_COLUMNS = [
-
-    # --------------------------------------------------------
-    # Weather
-    # --------------------------------------------------------
 
     "temperature_2m",
     "relative_humidity_2m",
@@ -169,10 +139,6 @@ FEATURE_COLUMNS = [
     "wind_speed_10m",
     "wind_direction_10m",
 
-    # --------------------------------------------------------
-    # Pollutants
-    # --------------------------------------------------------
-
     "pm2_5",
     "pm10",
     "carbon_monoxide",
@@ -180,19 +146,11 @@ FEATURE_COLUMNS = [
     "sulphur_dioxide",
     "ozone",
 
-    # --------------------------------------------------------
-    # Time
-    # --------------------------------------------------------
-
     "hour",
     "day_of_week",
     "day_of_month",
     "month",
     "is_weekend",
-
-    # --------------------------------------------------------
-    # AQI lags
-    # --------------------------------------------------------
 
     "aqi_lag_1",
     "aqi_lag_3",
@@ -202,129 +160,68 @@ FEATURE_COLUMNS = [
     "aqi_lag_48",
     "aqi_lag_72",
 
-    # --------------------------------------------------------
-    # PM2.5 lags
-    # --------------------------------------------------------
-
     "pm2_5_lag_1",
     "pm2_5_lag_3",
     "pm2_5_lag_6",
     "pm2_5_lag_24",
-
-    # --------------------------------------------------------
-    # PM10 lags
-    # --------------------------------------------------------
 
     "pm10_lag_1",
     "pm10_lag_3",
     "pm10_lag_6",
     "pm10_lag_24",
 
-    # --------------------------------------------------------
-    # Carbon monoxide lags
-    # --------------------------------------------------------
-
     "carbon_monoxide_lag_1",
     "carbon_monoxide_lag_3",
     "carbon_monoxide_lag_6",
     "carbon_monoxide_lag_24",
-
-    # --------------------------------------------------------
-    # Nitrogen dioxide lags
-    # --------------------------------------------------------
 
     "nitrogen_dioxide_lag_1",
     "nitrogen_dioxide_lag_3",
     "nitrogen_dioxide_lag_6",
     "nitrogen_dioxide_lag_24",
 
-    # --------------------------------------------------------
-    # Sulphur dioxide lags
-    # --------------------------------------------------------
-
     "sulphur_dioxide_lag_1",
     "sulphur_dioxide_lag_3",
     "sulphur_dioxide_lag_6",
     "sulphur_dioxide_lag_24",
-
-    # --------------------------------------------------------
-    # Ozone lags
-    # --------------------------------------------------------
 
     "ozone_lag_1",
     "ozone_lag_3",
     "ozone_lag_6",
     "ozone_lag_24",
 
-    # --------------------------------------------------------
-    # AQI rolling means
-    # --------------------------------------------------------
-
     "aqi_3h_mean",
     "aqi_6h_mean",
     "aqi_12h_mean",
     "aqi_24h_mean",
 
-    # --------------------------------------------------------
-    # PM2.5 rolling means
-    # --------------------------------------------------------
-
     "pm2_5_3h_mean",
     "pm2_5_6h_mean",
     "pm2_5_24h_mean",
 
-    # --------------------------------------------------------
-    # PM10 rolling means
-    # --------------------------------------------------------
-
     "pm10_3h_mean",
     "pm10_6h_mean",
     "pm10_24h_mean",
-
-    # --------------------------------------------------------
-    # Other pollutant rolling means
-    # --------------------------------------------------------
 
     "carbon_monoxide_24h_mean",
     "nitrogen_dioxide_24h_mean",
     "sulphur_dioxide_24h_mean",
     "ozone_24h_mean",
 
-    # --------------------------------------------------------
-    # AQI changes
-    # --------------------------------------------------------
-
     "aqi_change_1h",
     "aqi_change_3h",
     "aqi_change_6h",
     "aqi_change_24h",
 
-    # --------------------------------------------------------
-    # PM2.5 changes
-    # --------------------------------------------------------
-
     "pm2_5_change_1h",
     "pm2_5_change_24h",
-
-    # --------------------------------------------------------
-    # PM10 changes
-    # --------------------------------------------------------
 
     "pm10_change_1h",
     "pm10_change_24h",
 ]
 
 
-# ============================================================
-# FEATURE COUNT VALIDATION
-# ============================================================
-
-if len(FEATURE_COLUMNS) != 70:
-
-    raise ValueError(
-        f"Expected exactly 70 features, "
-        f"found {len(FEATURE_COLUMNS)}"
-    )
+assert len(FEATURE_COLUMNS) == 70
 
 
 # ============================================================
@@ -335,50 +232,50 @@ def print_header():
 
     print("=" * 70)
     print("PEARLS AQI PREDICTOR")
-    print("NEXT 3-DAY AQI FORECAST PIPELINE")
+    print("NEXT 3-DAY AQI FORECAST")
     print("=" * 70)
 
     print(
-        f"Project root       : {PROJECT_ROOT}"
+        "Project root:",
+        PROJECT_ROOT,
     )
 
     print(
-        f"Python executable  : {sys.executable}"
+        "Python:",
+        sys.executable,
     )
 
     print(
-        f"MLflow URI         : {MLFLOW_TRACKING_URI}"
+        "MLflow:",
+        MLFLOW_MODEL_URI,
     )
 
     print(
-        f"MLflow model       : {MLFLOW_MODEL_URI}"
+        "Feast:",
+        FEATURE_REPO,
     )
 
     print(
-        f"Feast repository   : {FEATURE_REPO}"
-    )
-
-    print(
-        f"Location           : {LOCATION_ID}"
-    )
-
-    print(
-        f"Forecast horizon   : {FORECAST_DAYS} days "
-        f"({FORECAST_HOURS} hours)"
+        "Model features:",
+        len(FEATURE_COLUMNS),
     )
 
 
 # ============================================================
-# LOAD MLflow CHAMPION
+# LOAD MLFLOW CHAMPION
 # ============================================================
 
 def load_model():
 
     print("\n" + "=" * 70)
-    print("LOADING MLflow CHAMPION MODEL")
+    print("LOADING MLFLOW CHAMPION")
     print("=" * 70)
 
     mlflow.set_tracking_uri(
+        MLFLOW_TRACKING_URI
+    )
+
+    mlflow.set_registry_uri(
         MLFLOW_TRACKING_URI
     )
 
@@ -388,8 +285,62 @@ def load_model():
     )
 
     print(
-        "Model URI:",
-        MLFLOW_MODEL_URI
+        "Registry URI:",
+        mlflow.get_registry_uri()
+    )
+
+    print(
+        "Model:",
+        MLFLOW_MODEL_NAME
+    )
+
+    print(
+        "Alias:",
+        MLFLOW_MODEL_ALIAS
+    )
+
+    from mlflow import MlflowClient
+
+    client = MlflowClient()
+
+    try:
+
+        registered_model = (
+            client.get_registered_model(
+                MLFLOW_MODEL_NAME
+            )
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "\nMLflow registered model was not found.\n"
+            f"Expected model: {MLFLOW_MODEL_NAME}\n"
+            f"Expected database: {MLFLOW_DATABASE}\n\n"
+            "Run the training pipeline first so the model "
+            "is registered and assigned the champion alias."
+        ) from exc
+
+    try:
+
+        champion = (
+            client.get_model_version_by_alias(
+                MLFLOW_MODEL_NAME,
+                MLFLOW_MODEL_ALIAS,
+            )
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "\nMLflow champion alias was not found.\n"
+            f"Model: {MLFLOW_MODEL_NAME}\n"
+            f"Alias: {MLFLOW_MODEL_ALIAS}\n"
+        ) from exc
+
+    print(
+        "Champion version:",
+        champion.version
     )
 
     model = mlflow.pyfunc.load_model(
@@ -401,13 +352,16 @@ def load_model():
     )
 
     print(
+        "Model URI:",
+        MLFLOW_MODEL_URI
+    )
+
+    print(
         "Model type:",
         type(model)
     )
 
     return model
-
-
 # ============================================================
 # LOAD FEAST
 # ============================================================
@@ -415,13 +369,12 @@ def load_model():
 def load_feast():
 
     print("\n" + "=" * 70)
-    print("LOADING FEAST FEATURE STORE")
+    print("LOADING FEAST")
     print("=" * 70)
 
     if not FEATURE_REPO.exists():
-
         raise FileNotFoundError(
-            "Feast repository not found:\n"
+            f"Feast repository not found: "
             f"{FEATURE_REPO}"
         )
 
@@ -429,39 +382,32 @@ def load_feast():
         repo_path=str(FEATURE_REPO)
     )
 
-    print(
-        "✓ Feast FeatureStore loaded"
-    )
-
-    print(
-        "Repository:",
-        FEATURE_REPO
-    )
-
     return store
 
 
-def get_api_forecast_hours():
-    """
-    Calculate how many future hourly records Open-Meteo
-    must return so that we can extract the next 3 complete
-    calendar days, excluding the current day.
-    """
+# ============================================================
+# FETCH WEATHER
+# ============================================================
 
-    now_utc = pd.Timestamp.now(tz="UTC")
+def fetch_weather():
 
-    current_date = now_utc.date()
+    now_utc = (
+        pd.Timestamp.now(tz="UTC")
+    )
 
-    forecast_start = (
-        pd.Timestamp(current_date, tz="UTC")
+    current_hour = (
+        now_utc.floor("h")
+    )
+
+    next_day = (
+        current_hour.normalize()
         + pd.Timedelta(days=1)
     )
 
     forecast_end = (
-        forecast_start
-        + pd.Timedelta(hours=FORECAST_HOURS - 1)
+        next_day
+        + pd.Timedelta(hours=71)
     )
-    current_hour = now_utc.floor("h")
 
     required_hours = int(
         (
@@ -471,22 +417,9 @@ def get_api_forecast_hours():
         / 3600
     ) + 1
 
-    return required_hours
-
-# ============================================================
-# FETCH WEATHER
-# ============================================================
-
-def fetch_weather():
-
-    print("\n" + "=" * 70)
-    print("FETCHING OPEN-METEO WEATHER DATA")
-    print("=" * 70)
-
     params = {
 
         "latitude": LATITUDE,
-
         "longitude": LONGITUDE,
 
         "hourly": (
@@ -500,7 +433,7 @@ def fetch_weather():
 
         "past_hours": HISTORY_HOURS,
 
-        "forecast_hours":  get_api_forecast_hours(),
+        "forecast_hours": required_hours,
 
         "timezone": "UTC",
 
@@ -521,52 +454,27 @@ def fetch_weather():
 
     data = response.json()
 
-    if "hourly" not in data:
-
-        raise ValueError(
-            "Weather response does not contain "
-            "hourly data."
-        )
-
-    weather = pd.DataFrame(
+    df = pd.DataFrame(
         data["hourly"]
     )
 
-    weather["timestamp"] = pd.to_datetime(
-        weather["time"],
+    df["timestamp"] = pd.to_datetime(
+        df["time"],
         utc=True,
     )
 
-    weather = weather.drop(
+    df = df.drop(
         columns=["time"]
     )
 
-    weather = (
-        weather
+    return (
+        df
         .sort_values("timestamp")
         .drop_duplicates(
-            subset=["timestamp"]
+            "timestamp"
         )
         .reset_index(drop=True)
     )
-
-    print(
-        "✓ Weather data received"
-    )
-
-    print(
-        "Rows:",
-        len(weather)
-    )
-
-    print(
-        "Range:",
-        weather["timestamp"].min(),
-        "→",
-        weather["timestamp"].max(),
-    )
-
-    return weather
 
 
 # ============================================================
@@ -575,14 +483,35 @@ def fetch_weather():
 
 def fetch_air_quality():
 
-    print("\n" + "=" * 70)
-    print("FETCHING OPEN-METEO AIR-QUALITY DATA")
-    print("=" * 70)
+    now_utc = (
+        pd.Timestamp.now(tz="UTC")
+    )
+
+    current_hour = (
+        now_utc.floor("h")
+    )
+
+    next_day = (
+        current_hour.normalize()
+        + pd.Timedelta(days=1)
+    )
+
+    forecast_end = (
+        next_day
+        + pd.Timedelta(hours=71)
+    )
+
+    required_hours = int(
+        (
+            forecast_end
+            - current_hour
+        ).total_seconds()
+        / 3600
+    ) + 1
 
     params = {
 
         "latitude": LATITUDE,
-
         "longitude": LONGITUDE,
 
         "hourly": (
@@ -597,7 +526,7 @@ def fetch_air_quality():
 
         "past_hours": HISTORY_HOURS,
 
-        "forecast_hours":  get_api_forecast_hours(),
+        "forecast_hours": required_hours,
 
         "timezone": "UTC",
     }
@@ -612,66 +541,37 @@ def fetch_air_quality():
 
     data = response.json()
 
-    if "hourly" not in data:
-
-        raise ValueError(
-            "Air-quality response does not contain "
-            "hourly data."
-        )
-
-    air = pd.DataFrame(
+    df = pd.DataFrame(
         data["hourly"]
     )
 
-    air["timestamp"] = pd.to_datetime(
-        air["time"],
+    df["timestamp"] = pd.to_datetime(
+        df["time"],
         utc=True,
     )
 
-    air = air.drop(
+    df = df.drop(
         columns=["time"]
     )
 
-    air = (
-        air
+    return (
+        df
         .sort_values("timestamp")
         .drop_duplicates(
-            subset=["timestamp"]
+            "timestamp"
         )
         .reset_index(drop=True)
     )
 
-    print(
-        "✓ Air-quality data received"
-    )
-
-    print(
-        "Rows:",
-        len(air)
-    )
-
-    print(
-        "Range:",
-        air["timestamp"].min(),
-        "→",
-        air["timestamp"].max(),
-    )
-
-    return air
-
 
 # ============================================================
-# MERGE API DATA
+# MERGE API
 # ============================================================
 
-def merge_data(
+def merge_api_data(
     weather,
     air,
 ):
-
-    print("\n" + "=" * 70)
-    print("MERGING WEATHER + AIR QUALITY")
-    print("=" * 70)
 
     df = pd.merge(
         weather,
@@ -684,190 +584,134 @@ def merge_data(
         df
         .sort_values("timestamp")
         .drop_duplicates(
-            subset=["timestamp"],
-            keep="last",
+            "timestamp"
         )
         .reset_index(drop=True)
     )
 
     if df.empty:
-
         raise ValueError(
-            "Merged Open-Meteo dataset is empty."
+            "Open-Meteo merged dataset is empty."
         )
-
-    print(
-        "✓ Data merged successfully"
-    )
-
-    print(
-        "Merged rows:",
-        len(df)
-    )
-
-    print(
-        "Merged range:",
-        df["timestamp"].min(),
-        "→",
-        df["timestamp"].max(),
-    )
 
     return df
 
 
 # ============================================================
-# GET FEAST HISTORICAL STATE
+# FEAST HISTORICAL CONTEXT
 # ============================================================
 
-def get_feast_state(
+def get_feast_historical_context(
     store,
-    timestamp,
+    timestamps,
 ):
 
     print("\n" + "=" * 70)
-    print("READING LATEST STATE FROM FEAST")
+    print("LOADING 70 FEATURES FROM FEAST")
     print("=" * 70)
 
-    entity_rows = [
+    entity_df = pd.DataFrame(
         {
-            "location_id": LOCATION_ID
+            "location_id": [
+                LOCATION_ID
+            ] * len(timestamps),
+
+            "event_timestamp": (
+                pd.to_datetime(
+                    timestamps,
+                    utc=True,
+                )
+            ),
         }
-    ]
-
-    print(
-        "Entity:",
-        LOCATION_ID
     )
 
-    print(
-        "Reference timestamp:",
-        timestamp
-    )
-
-    feature_names = [
+    feature_refs = [
         f"aqi_features:{feature}"
         for feature in FEATURE_COLUMNS
     ]
 
-    try:
-
-        result = store.get_online_features(
-            features=feature_names,
-            entity_rows=entity_rows,
-        ).to_dict()
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            "Feast online feature retrieval failed.\n"
-            f"{exc}"
-        ) from exc
-
-    feast_df = pd.DataFrame(result)
-
-    print(
-        "✓ Feast online feature retrieval succeeded"
+    # Add us_aqi separately because it is
+    # historical state used for recursive forecasting,
+    # but is NOT a model input.
+    feature_refs.append(
+        "aqi_features:us_aqi"
     )
 
-    print(
-        "Returned columns:",
-        len(feast_df.columns)
+    feast_df = (
+        store
+        .get_historical_features(
+            entity_df=entity_df,
+            features=feature_refs,
+        )
+        .to_df()
     )
 
-    # --------------------------------------------------------
-    # Validate entity
-    # --------------------------------------------------------
-
-    if "location_id" not in feast_df.columns:
-
-        raise ValueError(
-            "Feast response does not contain "
-            "'location_id'."
+    feast_df["event_timestamp"] = (
+        pd.to_datetime(
+            feast_df["event_timestamp"],
+            utc=True,
         )
+    )
 
-    if feast_df.empty:
-
-        raise ValueError(
-            "Feast returned an empty online feature state."
-        )
-
-    # --------------------------------------------------------
-    # Validate all 70 model features
-    # --------------------------------------------------------
-
-    missing_features = [
+    missing = [
         feature
         for feature in FEATURE_COLUMNS
         if feature not in feast_df.columns
     ]
 
-    if missing_features:
-
+    if missing:
         raise ValueError(
-            "Feast response is missing model features:\n"
-            + "\n".join(missing_features)
-        )
-
-    # --------------------------------------------------------
-    # Extract exactly the 70 model features
-    # --------------------------------------------------------
-
-    feature_state = (
-        feast_df[
-            FEATURE_COLUMNS
-        ]
-        .iloc[0]
-        .to_frame()
-        .T
-        .reset_index(drop=True)
-    )
-
-    # --------------------------------------------------------
-    # Numeric conversion
-    # --------------------------------------------------------
-
-    feature_state = feature_state.astype(float)
-
-    # --------------------------------------------------------
-    # Missing-value validation
-    # --------------------------------------------------------
-
-    if feature_state.isna().any().any():
-
-        missing = (
-            feature_state.columns[
-                feature_state.isna().any()
-            ]
-            .tolist()
-        )
-
-        raise ValueError(
-            "Feast returned missing values for:\n"
+            "Feast is missing model features:\n"
             + "\n".join(missing)
         )
 
+    if "us_aqi" not in feast_df.columns:
+        raise ValueError(
+            "Feast did not return us_aqi."
+        )
+
+    if len(FEATURE_COLUMNS) != 70:
+        raise ValueError(
+            "Feature count is not 70."
+        )
+
+    feast_df = (
+        feast_df
+        .sort_values(
+            "event_timestamp"
+        )
+        .reset_index(drop=True)
+    )
+
+    if feast_df.empty:
+        raise ValueError(
+            "Feast returned no historical rows."
+        )
+
     print(
-        "✓ Feast returned all 70 model features"
+        "Feast historical rows:",
+        len(feast_df),
     )
 
     print(
-        "Feature vector shape:",
-        feature_state.shape
+        "Feast model features:",
+        len(FEATURE_COLUMNS),
     )
 
-    return feature_state
+    print(
+        "Feast historical feature loading: PASS"
+    )
+
+    return feast_df
+
 
 # ============================================================
-# FEATURE ENGINEERING
+# CREATE FUTURE FEATURES
 # ============================================================
 
 def create_features(df):
 
     df = df.copy()
-
-    # --------------------------------------------------------
-    # TIME
-    # --------------------------------------------------------
 
     df["hour"] = (
         df["timestamp"].dt.hour
@@ -889,10 +733,6 @@ def create_features(df):
         df["day_of_week"] >= 5
     ).astype(int)
 
-    # --------------------------------------------------------
-    # AQI LAGS
-    # --------------------------------------------------------
-
     for lag in [
         1,
         3,
@@ -903,13 +743,12 @@ def create_features(df):
         72,
     ]:
 
-        df[f"aqi_lag_{lag}"] = (
-            df["us_aqi"].shift(lag)
+        df[
+            f"aqi_lag_{lag}"
+        ] = (
+            df["us_aqi"]
+            .shift(lag)
         )
-
-    # --------------------------------------------------------
-    # POLLUTANT LAGS
-    # --------------------------------------------------------
 
     pollutants = [
         "pm2_5",
@@ -936,10 +775,6 @@ def create_features(df):
                 .shift(lag)
             )
 
-    # --------------------------------------------------------
-    # AQI ROLLING
-    # --------------------------------------------------------
-
     for window in [
         3,
         6,
@@ -956,10 +791,6 @@ def create_features(df):
             .mean()
         )
 
-    # --------------------------------------------------------
-    # PM2.5 ROLLING
-    # --------------------------------------------------------
-
     for window in [
         3,
         6,
@@ -974,10 +805,6 @@ def create_features(df):
             .rolling(window)
             .mean()
         )
-
-    # --------------------------------------------------------
-    # PM10 ROLLING
-    # --------------------------------------------------------
 
     for window in [
         3,
@@ -994,10 +821,6 @@ def create_features(df):
             .mean()
         )
 
-    # --------------------------------------------------------
-    # OTHER POLLUTANT ROLLING
-    # --------------------------------------------------------
-
     for pollutant in [
         "carbon_monoxide",
         "nitrogen_dioxide",
@@ -1013,10 +836,6 @@ def create_features(df):
             .rolling(24)
             .mean()
         )
-
-    # --------------------------------------------------------
-    # AQI CHANGE
-    # --------------------------------------------------------
 
     df["aqi_change_1h"] = (
         df["us_aqi"]
@@ -1038,10 +857,6 @@ def create_features(df):
         - df["aqi_lag_24"]
     )
 
-    # --------------------------------------------------------
-    # PM2.5 CHANGE
-    # --------------------------------------------------------
-
     df["pm2_5_change_1h"] = (
         df["pm2_5"]
         - df["pm2_5_lag_1"]
@@ -1051,10 +866,6 @@ def create_features(df):
         df["pm2_5"]
         - df["pm2_5_lag_24"]
     )
-
-    # --------------------------------------------------------
-    # PM10 CHANGE
-    # --------------------------------------------------------
 
     df["pm10_change_1h"] = (
         df["pm10"]
@@ -1070,116 +881,113 @@ def create_features(df):
 
 
 # ============================================================
-# PREDICT
+# FORECAST
 # ============================================================
 
-def predict_forecast(
+def generate_forecast(
     model,
-    feast_state,
+    feast_history,
     api_df,
 ):
 
-    print("\n" + "=" * 70)
-    print("GENERATING NEXT 3-DAY FORECAST")
-    print("=" * 70)
+    now_utc = (
+        pd.Timestamp.now(tz="UTC")
+    )
 
-    # ============================================================
-    # NEXT 3 CALENDAR DAYS
-    # ============================================================
-
-   
-    now_utc = pd.Timestamp.now(tz="UTC")
-
-    current_date = now_utc.date()
+    current_date = (
+        now_utc.date()
+    )
 
     forecast_start = (
-        pd.Timestamp(current_date, tz="UTC")
+        pd.Timestamp(
+            current_date,
+            tz="UTC",
+        )
         + pd.Timedelta(days=1)
     )
 
     forecast_end = (
         forecast_start
-        + pd.Timedelta(hours=FORECAST_HOURS - 1)
+        + pd.Timedelta(hours=71)
     )
-
-    print("Current UTC time:", now_utc)
-    print("Current date:", current_date)
-
-    print(
-        "Forecast start:",
-        forecast_start
-    )
-
-    print(
-        "Forecast end:",
-        forecast_end
-    )
-
-    # ============================================================
-    # EXTRACT EXACT 72-HOUR FUTURE WINDOW
-    # ============================================================
-
-    future_df = api_df[
-        (api_df["timestamp"] >= forecast_start)
-        & (api_df["timestamp"] <= forecast_end)
-    ].copy()
 
     future_df = (
-        future_df
+        api_df[
+            (
+                api_df["timestamp"]
+                >= forecast_start
+            )
+            &
+            (
+                api_df["timestamp"]
+                <= forecast_end
+            )
+        ]
+        .copy()
         .sort_values("timestamp")
-        .drop_duplicates(
-            subset=["timestamp"],
-            keep="last"
-        )
         .reset_index(drop=True)
     )
 
-    print(
-        "Future rows from Open-Meteo:",
-        len(future_df)
-    )
-
-   
-    # --------------------------------------------------------
-    # We require exactly 72 hourly rows.
-    # --------------------------------------------------------
-
-    if len(future_df) != FORECAST_HOURS:
+    if len(future_df) != 72:
 
         raise ValueError(
-            "Open-Meteo did not provide exactly "
-            f"{FORECAST_HOURS} hourly rows for "
-            "the next three calendar days.\n"
-            f"Received: {len(future_df)}\n"
-            f"Expected: {FORECAST_HOURS}\n"
-            f"Start: {forecast_start}\n"
-            f"End: {forecast_end}"
+            f"Expected 72 future rows, "
+            f"received {len(future_df)}"
         )
 
-    # --------------------------------------------------------
-    # Build historical context.
-    #
-    # We use the most recent API history and replace the
-    # latest historical state with the Feast state where
-    # possible.
-    # --------------------------------------------------------
+    # ========================================================
+    # BUILD API HISTORY
+    # ========================================================
 
     history_start = (
         forecast_start
-        - pd.Timedelta(hours=HISTORY_HOURS)
+        - pd.Timedelta(hours=96)
     )
 
-    history = api_df[
-        (
-            api_df["timestamp"]
-            >= history_start
-        )
-        &
-        (
-            api_df["timestamp"]
-            < forecast_start
-        )
+    api_history = (
+        api_df[
+            (
+                api_df["timestamp"]
+                >= history_start
+            )
+            &
+            (
+                api_df["timestamp"]
+                < forecast_start
+            )
+        ]
+        .copy()
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    # ========================================================
+    # REPLACE API AQI HISTORY WITH FEAST AQI
+    # ========================================================
+
+    feast_aqi = feast_history[
+        [
+            "event_timestamp",
+            "us_aqi",
+        ]
     ].copy()
+
+    feast_aqi = feast_aqi.rename(
+        columns={
+            "event_timestamp":
+                "timestamp"
+        }
+    )
+
+    history = pd.merge(
+        api_history.drop(
+            columns=["us_aqi"],
+            errors="ignore",
+        ),
+        feast_aqi,
+        on="timestamp",
+        how="inner",
+    )
 
     history = (
         history
@@ -1188,146 +996,92 @@ def predict_forecast(
     )
 
     if len(history) < 72:
-
         raise ValueError(
-            "Insufficient historical context for "
-            "72-hour lag features.\n"
-            f"Received: {len(history)} rows."
+            "Insufficient Feast historical "
+            "context for recursive forecast."
         )
-
-    # --------------------------------------------------------
-    # Feast validation.
-    #
-    # Feast is used as the authoritative online feature-store
-    # integration point. We verify that it is populated.
-    # --------------------------------------------------------
-
-    if feast_state.empty:
-
-        raise ValueError(
-            "Feast returned an empty online feature state."
-        )
-
-    # --------------------------------------------------------
-    # Extract Feast values where available.
-    #
-    # We don't blindly overwrite the API history because
-    # future recursive forecasting needs a continuous
-    # timestamped history containing the pollutant/weather
-    # values as well.
-    # --------------------------------------------------------
-
-    print(
-        "✓ Feast state available for forecast context"
-    )
-
-    # --------------------------------------------------------
-    # Recursive forecasting.
-    # --------------------------------------------------------
 
     predictions = []
 
-    prediction_features = []
+    feature_records = []
 
-    working_history = history.copy()
+    working_history = (
+        history.copy()
+    )
 
-    for step in range(FORECAST_HOURS):
+    # ========================================================
+    # RECURSIVE 72 HOURS
+    # ========================================================
+
+    for step in range(72):
 
         future_row = (
             future_df
             .iloc[step]
-            .copy()
         )
 
         prediction_timestamp = (
             future_row["timestamp"]
         )
 
-        # ----------------------------------------------------
-        # Anchor is the immediately preceding hour.
-        # ----------------------------------------------------
-
+        # ----------------------------------------------
+        # Feature construction
+        # ----------------------------------------------
+        
         anchor_timestamp = (
-            prediction_timestamp
-            - pd.Timedelta(hours=1)
-        )
+                    prediction_timestamp
+                    - pd.Timedelta(hours=1)
+                )
+        if step == 0:
 
-        anchor_rows = working_history[
-            working_history["timestamp"]
-            == anchor_timestamp
-        ]
-
-        if anchor_rows.empty:
-
-            raise ValueError(
-                "Missing anchor row for "
-                f"{prediction_timestamp}.\n"
-                f"Expected: {anchor_timestamp}"
-            )
-
-        # ----------------------------------------------------
-        # Construct feature frame from historical state.
-        # ----------------------------------------------------
-
-        feature_df = create_features(
-            working_history
-        )
-
-        target_rows = feature_df[
-            feature_df["timestamp"]
-            == anchor_timestamp
-        ]
-
-        if target_rows.empty:
-
-            raise ValueError(
-                "Could not construct features for "
-                f"anchor {anchor_timestamp}"
-            )
-
-        target_row = (
-            target_rows
-            .iloc[-1]
-        )
-
-        # ----------------------------------------------------
-        # Model input.
-        # ----------------------------------------------------
-
-        X = (
-            target_row[
+            X = feast_history[
                 FEATURE_COLUMNS
+            ].copy()
+
+        else:
+
+            feature_frame = create_features(
+                working_history
+            )
+
+            anchor_rows = feature_frame[
+                feature_frame["timestamp"]
+                == anchor_timestamp
             ]
-            .to_frame()
-            .T
-        )
+        
+
+            if anchor_rows.empty:
+                raise ValueError(
+                    "Missing feature anchor: "
+                    f"{anchor_timestamp}"
+                )
+
+            row = (
+                anchor_rows
+                .iloc[-1]
+            )
+
+            X = (
+                row[
+                    FEATURE_COLUMNS
+                ]
+                .to_frame()
+                .T
+                .astype(float)
+            )
+
+        # ----------------------------------------------
+        # EXACT 70 FEATURE CHECK
+        # ----------------------------------------------
 
         X = X.astype(float)
 
-        # ----------------------------------------------------
-        # Save exact 70-feature vector used for this prediction
-        # ----------------------------------------------------
+        assert X.shape[1] == 70
 
-        feature_record = X.iloc[0].to_dict()
-
-        feature_record["timestamp"] = prediction_timestamp
-
-        prediction_features.append(feature_record)
-
-        # ----------------------------------------------------
-        # Validate all 70 features.
-        # ----------------------------------------------------
-
-        if X.shape[1] != 70:
-
-            raise ValueError(
-                "Model input does not contain exactly "
-                f"70 features. Found {X.shape[1]}."
-            )
 
         if X.isna().any().any():
 
-            missing_features = (
+            missing = (
                 X.columns[
                     X.isna().any()
                 ]
@@ -1335,50 +1089,58 @@ def predict_forecast(
             )
 
             raise ValueError(
-                "Missing features for "
-                f"{anchor_timestamp}:\n"
-                + "\n".join(
-                    missing_features
-                )
+                "Missing prediction features:\n"
+                + "\n".join(missing)
             )
 
-        # ----------------------------------------------------
-        # Predict.
-        # ----------------------------------------------------
+        # ----------------------------------------------
+        # Predict
+        # ----------------------------------------------
 
         prediction = model.predict(X)
 
         predicted_aqi = float(
             np.asarray(
                 prediction
-            ).reshape(-1)[0]
+            )
+            .reshape(-1)[0]
         )
 
         predicted_aqi = max(
             0.0,
-            predicted_aqi
+            predicted_aqi,
         )
-
-        # ----------------------------------------------------
-        # Save prediction.
-        # ----------------------------------------------------
 
         predictions.append(
             {
                 "timestamp":
                     prediction_timestamp,
-
                 "predicted_aqi":
                     predicted_aqi,
             }
         )
 
-        # ----------------------------------------------------
-        # Add predicted AQI to recursive history.
-        #
-        # Future weather/pollutants come from Open-Meteo.
-        # AQI is replaced by our model prediction.
-        # ----------------------------------------------------
+        # ----------------------------------------------
+        # Save exact feature vector
+        # ----------------------------------------------
+
+        feature_record = {
+            column:
+                float(X.iloc[0][column])
+            for column in FEATURE_COLUMNS
+        }
+
+        feature_record[
+            "timestamp"
+        ] = prediction_timestamp
+
+        feature_records.append(
+            feature_record
+        )
+
+        # ----------------------------------------------
+        # Recursive state
+        # ----------------------------------------------
 
         predicted_row = {
 
@@ -1466,34 +1228,18 @@ def predict_forecast(
             .reset_index(drop=True)
         )
 
-        # ----------------------------------------------------
-        # Progress
-        # ----------------------------------------------------
-
-        if (
-            step < 3
-            or (step + 1) % 12 == 0
-            or step == FORECAST_HOURS - 1
-        ):
-
-            print(
-                f"Hour {step + 1:02d}/"
-                f"{FORECAST_HOURS} | "
-                f"{prediction_timestamp} | "
-                f"AQI: {predicted_aqi:.2f}"
-            )
-
-    # ========================================================
-    # RESULTS
-    # ========================================================
-
-    forecast_df = pd.DataFrame(
-        predictions
+    forecast_df = (
+        pd.DataFrame(
+            predictions
+        )
     )
 
-    forecast_df["forecast_day"] = (
-        forecast_df["timestamp"]
-        .dt.date
+    forecast_df[
+        "forecast_day"
+    ] = (
+        forecast_df[
+            "timestamp"
+        ].dt.date
     )
 
     # ========================================================
@@ -1514,197 +1260,133 @@ def predict_forecast(
         )
     )
 
-    # --------------------------------------------------------
-    # Validate exactly 3 days.
-    # --------------------------------------------------------
-
-    if len(daily_forecast) != 3:
-
+    if len(
+        forecast_df
+    ) != 72:
         raise ValueError(
-            "Expected exactly 3 forecast days, "
-            f"found {len(daily_forecast)}."
+            "Expected 72 predictions."
         )
 
-    # --------------------------------------------------------
-    # Validate 24 hours/day.
-    # --------------------------------------------------------
+    if len(
+        daily_forecast
+    ) != 3:
+        raise ValueError(
+            "Expected 3 daily averages."
+        )
 
-    hours_per_day = (
+    counts = (
         forecast_df
-        .groupby("forecast_day")
+        .groupby(
+            "forecast_day"
+        )
         .size()
     )
 
-    invalid_days = (
-        hours_per_day[
-            hours_per_day != 24
-        ]
-    )
-
-    if not invalid_days.empty:
+    if not (
+        counts == 24
+    ).all():
 
         raise ValueError(
-            "Each forecast day must contain "
-            "exactly 24 hourly predictions.\n"
-            f"Invalid days:\n{invalid_days}"
+            "Every forecast day must "
+            "contain exactly 24 predictions."
         )
 
-    # ========================================================
-    # PRINT RESULTS
-    # ========================================================
-
-    print("\n" + "=" * 70)
-    print("NEXT 3 DAYS — DAILY AQI FORECAST")
-    print("=" * 70)
-
-    for _, row in daily_forecast.iterrows():
-
-        print(
-            f"{row['forecast_day']} | "
-            f"Average AQI: "
-            f"{row['predicted_aqi']:.2f}"
-        )
-
-    print("\n" + "=" * 70)
-    print("HOURLY FORECAST")
-    print("=" * 70)
-
-    print(
-        forecast_df[
-            [
-                "timestamp",
-                "predicted_aqi",
-            ]
-        ].to_string(
-            index=False
+    feature_df = (
+        pd.DataFrame(
+            feature_records
         )
     )
 
-    prediction_features_df = pd.DataFrame(
-        prediction_features
-    )
-
-    prediction_features_df = prediction_features_df[
-        ["timestamp"] + FEATURE_COLUMNS
+    feature_df = feature_df[
+        [
+            "timestamp"
+        ]
+        + FEATURE_COLUMNS
     ]
+
+    if feature_df.shape != (
+        72,
+        71,
+    ):
+        raise ValueError(
+            "Forecast feature output must "
+            "contain 72 rows + timestamp + "
+            "70 features."
+        )
 
     return (
         forecast_df,
         daily_forecast,
-        prediction_features_df,
+        feature_df,
     )
 
 
 # ============================================================
-# SAVE RESULTS
+# SAVE
 # ============================================================
 
-def save_predictions(
+def save_outputs(
     forecast_df,
     daily_forecast,
-    prediction_features_df,
+    feature_df,
 ):
-
-    print("\n" + "=" * 70)
-    print("SAVING PREDICTIONS")
-    print("=" * 70)
 
     PREDICTION_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    # --------------------------------------------------------
-    # Hourly
-    # --------------------------------------------------------
-
-    hourly_output = forecast_df[
+    forecast_df[
         [
             "timestamp",
             "predicted_aqi",
         ]
-    ].copy()
-
-    hourly_output.to_csv(
+    ].to_csv(
         HOURLY_PREDICTION_FILE,
         index=False,
     )
 
-    print(
-        "✓ Hourly forecast saved:"
-    )
-
-    print(
-        HOURLY_PREDICTION_FILE
-    )
-
-    # --------------------------------------------------------
-    # Daily
-    # --------------------------------------------------------
-
-    daily_output = daily_forecast[
+    daily_forecast[
         [
             "forecast_day",
             "predicted_aqi",
         ]
-    ].copy()
-
-    daily_output.to_csv(
+    ].to_csv(
         DAILY_PREDICTION_FILE,
         index=False,
     )
 
-    print(
-        "✓ Daily forecast saved:"
-    )
-
-    print(
-        DAILY_PREDICTION_FILE
-    )
-
-    # --------------------------------------------------------
-    # Prediction feature context
-    # --------------------------------------------------------
-
-    prediction_features_df.to_csv(
+    feature_df.to_csv(
         FEATURE_PREDICTION_FILE,
         index=False,
     )
 
-    print(
-        "✓ Forecast feature context saved:"
+    assert (
+        len(
+            pd.read_csv(
+                HOURLY_PREDICTION_FILE
+            )
+        )
+        == 72
     )
 
-    print(
-        FEATURE_PREDICTION_FILE
+    assert (
+        len(
+            pd.read_csv(
+                DAILY_PREDICTION_FILE
+            )
+        )
+        == 3
     )
 
-
-    # --------------------------------------------------------
-    # Validate files
-    # --------------------------------------------------------
-
-    if not HOURLY_PREDICTION_FILE.exists():
-
-        raise FileNotFoundError(
-            "Hourly forecast file was not created."
+    assert (
+        len(
+            pd.read_csv(
+                FEATURE_PREDICTION_FILE
+            )
         )
-
-    if not DAILY_PREDICTION_FILE.exists():
-
-        raise FileNotFoundError(
-            "Daily forecast file was not created."
-        )
-
-    print(
-        "\n✓ Prediction artifacts saved successfully"
+        == 72
     )
-
-    if not FEATURE_PREDICTION_FILE.exists():
-
-        raise FileNotFoundError(
-            "Forecast feature context file was not created."
-        )
 
 
 # ============================================================
@@ -1715,117 +1397,177 @@ def main():
 
     print_header()
 
-    # --------------------------------------------------------
-    # MLflow
-    # --------------------------------------------------------
+    # ========================================================
+    # MLflow champion
+    # ========================================================
 
     model = load_model()
 
-    # --------------------------------------------------------
+    # ========================================================
     # Feast
-    # --------------------------------------------------------
+    # ========================================================
 
     store = load_feast()
 
-    # --------------------------------------------------------
+    # ========================================================
     # Open-Meteo
-    # --------------------------------------------------------
+    # ========================================================
 
     weather = fetch_weather()
 
     air = fetch_air_quality()
 
-    # --------------------------------------------------------
-    # Merge
-    # --------------------------------------------------------
-
-    api_df = merge_data(
+    api_df = merge_api_data(
         weather,
         air,
     )
 
-    # --------------------------------------------------------
-    # Get latest Feast state.
-    #
-    # The latest historical point available to the online
-    # feature store is used as the feature-store integration
-    # check/context.
-    # --------------------------------------------------------
+    # ========================================================
+    # LAST 96 HOURS FOR FEAST
+    # ========================================================
 
-    feast_state = get_feast_state(
-        store,
-        api_df["timestamp"].max(),
+    now_utc = (
+        pd.Timestamp.now(tz="UTC")
     )
 
-    # --------------------------------------------------------
-    # Predict
-    # --------------------------------------------------------
+    forecast_start = (
+        pd.Timestamp(
+            now_utc.date(),
+            tz="UTC",
+        )
+        + pd.Timedelta(days=1)
+    )
+
+    history_start = (
+        forecast_start
+        - pd.Timedelta(hours=96)
+    )
+
+    history_timestamps = (
+        api_df[
+            (
+                api_df["timestamp"]
+                >= history_start
+            )
+            &
+            (
+                api_df["timestamp"]
+                < forecast_start
+            )
+        ]
+        [
+            "timestamp"
+        ]
+        .drop_duplicates()
+        .sort_values()
+        .tolist()
+    )
+
+    feast_history = (
+        get_feast_historical_context(
+            store,
+            history_timestamps,
+        )
+    )
+
+    # ========================================================
+    # FORECAST
+    # ========================================================
 
     (
         forecast_df,
         daily_forecast,
-        prediction_features_df,
-    ) = predict_forecast(
+        feature_df,
+    ) = generate_forecast(
         model=model,
-        feast_state=feast_state,
+        feast_history=feast_history,
         api_df=api_df,
     )
 
-    # --------------------------------------------------------
-    # Save
-    # --------------------------------------------------------
+    # ========================================================
+    # SAVE
+    # ========================================================
 
-    save_predictions(
+    save_outputs(
         forecast_df,
         daily_forecast,
-        prediction_features_df,
+        feature_df,
     )
 
-    # --------------------------------------------------------
-    # Final
-    # --------------------------------------------------------
+    # ========================================================
+    # FINAL VERIFICATION
+    # ========================================================
 
     print("\n" + "=" * 70)
-    print("PREDICTION PIPELINE COMPLETED")
+    print("PREDICTION PIPELINE VERIFIED")
     print("=" * 70)
 
     print(
-        "\nNext 3 calendar days:"
+        "Feast model features loaded:",
+        70,
     )
 
-    for _, row in daily_forecast.iterrows():
+    print(
+        "MLflow champion:",
+        MLFLOW_MODEL_URI,
+    )
 
-        print(
-            f"{row['forecast_day']} | "
-            f"Average AQI: "
-            f"{row['predicted_aqi']:.2f}"
+    print(
+        "Hourly predictions:",
+        len(forecast_df),
+    )
+
+    print(
+        "Daily averages:",
+        len(daily_forecast),
+    )
+
+    print(
+        "\nDAILY AQI"
+    )
+
+    print(
+        daily_forecast.to_string(
+            index=False
         )
-
-    print(
-        "\n✓ MLflow champion used"
     )
 
     print(
-        "✓ Feast feature store connected"
+        "\nHourly prediction file:",
+        HOURLY_PREDICTION_FILE,
     )
 
     print(
-        "✓ Open-Meteo future inputs loaded"
+        "Daily prediction file:",
+        DAILY_PREDICTION_FILE,
     )
 
     print(
-        "✓ Exactly 3 forecast days generated"
+        "Feature file:",
+        FEATURE_PREDICTION_FILE,
+    )
+
+    assert len(
+        forecast_df
+    ) == 72
+
+    assert len(
+        daily_forecast
+    ) == 3
+
+    assert len(
+        feature_df
+    ) == 72
+
+    assert (
+        feature_df.shape[1]
+        == 71
     )
 
     print(
-        "✓ 72 hourly predictions generated"
+        "\nALL PREDICTION CHECKS PASSED"
     )
 
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
-
     main()
