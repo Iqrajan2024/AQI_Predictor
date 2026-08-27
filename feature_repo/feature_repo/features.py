@@ -175,9 +175,6 @@ aqi_features = FeatureView(
         Field(name="sulphur_dioxide", dtype=Float32),
         Field(name="ozone", dtype=Float32),
 
-        # Current AQI
-        Field(name="us_aqi", dtype=Float32),
-
         # Time
         Field(name="hour", dtype=Int64),
         Field(name="day_of_week", dtype=Int64),
@@ -266,19 +263,7 @@ aqi_features = FeatureView(
         Field(name="pm10_change_1h", dtype=Float32),
         Field(name="pm10_change_24h", dtype=Float32),
 
-        # ====================================================
-        # CURRENT AQI
-        # NOT USED AS MODEL INPUT
-        # ====================================================
-
-        Field(name="us_aqi", dtype=Float32),
-
-        # ====================================================
-        # HISTORICAL LABEL
-        # NOT USED AS MODEL INPUT
-        # ====================================================
-
-        Field(name="target_aqi", dtype=Float32),
+        
     ],
 
     source=aqi_source,

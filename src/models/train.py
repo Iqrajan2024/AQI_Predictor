@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import joblib
 
 import mlflow
 import mlflow.sklearn
@@ -26,11 +27,7 @@ from xgboost import XGBRegressor
 # PATHS
 # ============================================================
 
-PROJECT_ROOT = (
-    Path(__file__)
-    .resolve()
-    .parents[2]
-)
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 FEATURE_REPO = (
     PROJECT_ROOT
@@ -38,55 +35,41 @@ FEATURE_REPO = (
     / "feature_repo"
 )
 
-MODEL_DIR = (
-    PROJECT_ROOT
-    / "models"
-)
+DATA_DIR = PROJECT_ROOT / "data" / "processed"
 
-MODEL_DIR.mkdir(
-    parents=True,
-    exist_ok=True,
-)
+FEATURE_FILE = DATA_DIR / "aqi_features.parquet"
+
+MODEL_DIR = PROJECT_ROOT / "models"
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================
 # MLflow
 # ============================================================
 
-MLFLOW_DATABASE = (
-    PROJECT_ROOT / "mlflow.db"
-)
-
-MLFLOW_TRACKING_URI = (
-    f"sqlite:///{MLFLOW_DATABASE.as_posix()}"
-)
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
 
 MODEL_NAME = "Pearls_AQI_XGBoost"
 MODEL_ALIAS = "champion"
+EXPERIMENT_NAME = "Pearls_AQI_Training"
 
-mlflow.set_tracking_uri(
-    MLFLOW_TRACKING_URI
-)
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
 
-mlflow.set_registry_uri(
-    MLFLOW_TRACKING_URI
-)
+mlflow.set_experiment(EXPERIMENT_NAME)
+
+
+# ============================================================
+# FEAST
+# ============================================================
 
 store = FeatureStore(
     repo_path=str(FEATURE_REPO)
 )
 
-EXPERIMENT_NAME = "Pearls_AQI_Training"
-
-MODEL_NAME = "Pearls_AQI_Model"
-
-mlflow.set_experiment(
-    EXPERIMENT_NAME
-)
-
 
 # ============================================================
-# FEATURES
+# EXACT 70 MODEL FEATURES
 # ============================================================
 
 FEATURE_COLUMNS = [
@@ -179,162 +162,302 @@ FEATURE_COLUMNS = [
     "pm10_change_24h",
 ]
 
-
 assert len(FEATURE_COLUMNS) == 70
+
+assert "target_aqi" not in FEATURE_COLUMNS
+assert "us_aqi" not in FEATURE_COLUMNS
 
 
 # ============================================================
-# LOAD TRAINING DATA THROUGH FEAST
+# VALIDATE FEAST FEATURE SERVICE
+# ============================================================
+
+def validate_feature_contract():
+
+    print("=" * 70)
+    print("FEAST FEATURE CONTRACT")
+    print("=" * 70)
+
+    service = store.get_feature_service(
+        "aqi_model_features"
+    )
+
+    feast_features = [
+        feature.name
+        for projection in service.feature_view_projections
+        for feature in projection.features
+    ]
+
+    print(
+        "Expected feature count:",
+        len(FEATURE_COLUMNS),
+    )
+
+    print(
+        "Feast feature count:",
+        len(feast_features),
+    )
+
+    duplicates = sorted(
+        {
+            feature
+            for feature in feast_features
+            if feast_features.count(feature) > 1
+        }
+    )
+
+    if duplicates:
+        raise ValueError(
+            f"Duplicate Feast features: {duplicates}"
+        )
+
+    missing = sorted(
+        set(FEATURE_COLUMNS)
+        - set(feast_features)
+    )
+
+    extra = sorted(
+        set(feast_features)
+        - set(FEATURE_COLUMNS)
+    )
+
+    if missing or extra:
+        raise ValueError(
+            "Feast/model feature contract mismatch.\n"
+            f"Missing: {missing}\n"
+            f"Extra: {extra}"
+        )
+
+    if "target_aqi" in feast_features:
+        raise ValueError(
+            "target_aqi must NOT be a Feast model feature."
+        )
+
+    if "us_aqi" in feast_features:
+        raise ValueError(
+            "us_aqi must NOT be a Feast model feature."
+        )
+
+    print("✓ Feature count: 70")
+    print("✓ No duplicate features")
+    print("✓ Exact feature-name match")
+    print("✓ target_aqi excluded")
+    print("✓ us_aqi excluded")
+    print("✓ FEATURE CONTRACT: PASS")
+
+
+# ============================================================
+# LOAD TRAINING DATA
+#
+# IMPORTANT:
+# Do NOT call Feast get_historical_features() here.
+#
+# Your Feast FileSource + DuckDB + Ibis point-in-time join
+# is what is causing the OutOfMemoryException.
+#
+# The parquet file already contains the engineered feature
+# rows and target_aqi. We therefore load only the exact
+# training columns directly from the same Feast batch source.
+#
+# Feast remains responsible for the feature contract and
+# online serving.
 # ============================================================
 
 def load_training_data():
 
     print("=" * 70)
-    print("LOADING HISTORICAL TRAINING DATA THROUGH FEAST")
+    print("LOADING HISTORICAL TRAINING DATA")
     print("=" * 70)
 
-    store = FeatureStore(
-        repo_path=str(FEATURE_REPO)
-    )
-
-    source = store.get_data_source(
-        "aqi_features_source"
-    )
-
-    source_query = (
-        source.get_table_query_string()
-    )
-
-    entity_sql = f"""
-        SELECT
-            location_id,
-            timestamp AS event_timestamp,
-            target_aqi
-        FROM {source_query}
-        WHERE target_aqi IS NOT NULL
-    """
-
-    print("Using Feast historical retrieval...")
-
-    training_df = (
-        store
-        .get_historical_features(
-            entity_df=entity_sql,
-            features=store.get_feature_service(
-                "aqi_model_features"
-            ),
+    if not FEATURE_FILE.exists():
+        raise FileNotFoundError(
+            f"Feature parquet does not exist:\n"
+            f"{FEATURE_FILE}"
         )
-        .to_df()
+
+    validate_feature_contract()
+
+    print("=" * 70)
+    print("LOADING SOURCE DATA")
+    print("=" * 70)
+
+    required_columns = [
+        "location_id",
+        "timestamp",
+        "target_aqi",
+    ] + FEATURE_COLUMNS
+
+    # Read only the required columns.
+    # This avoids loading the complete 80-column parquet.
+    df = pd.read_parquet(
+        FEATURE_FILE,
+        columns=required_columns,
+        engine="pyarrow",
     )
 
-    if training_df.empty:
+    if df.empty:
         raise ValueError(
-            "Feast returned an empty training dataset."
+            "Feature parquet is empty."
         )
 
-    training_df["event_timestamp"] = (
-        pd.to_datetime(
-            training_df["event_timestamp"],
-            utc=True,
-        )
+    print(
+        "Source training shape:",
+        df.shape,
     )
 
-    training_df = (
-        training_df
-        .sort_values("event_timestamp")
+    print(
+        "Locations:",
+        df["location_id"].nunique(),
+    )
+
+    df["timestamp"] = pd.to_datetime(
+        df["timestamp"],
+        utc=True,
+    )
+
+    df = (
+        df
+        .sort_values(
+            ["location_id", "timestamp"]
+        )
         .reset_index(drop=True)
     )
 
-    required = set(
-        FEATURE_COLUMNS
-        + [
-            "location_id",
-            "event_timestamp",
-            "target_aqi",
-        ]
+    print(
+        "First timestamp:",
+        df["timestamp"].min(),
     )
 
-    missing = (
-        required
-        .difference(training_df.columns)
+    print(
+        "Last timestamp:",
+        df["timestamp"].max(),
     )
 
-    if missing:
+    print(
+        "target_aqi available:",
+        df["target_aqi"].notna().sum(),
+    )
+
+    # --------------------------------------------------------
+    # HARD CONTRACT CHECKS
+    # --------------------------------------------------------
+
+    if "target_aqi" not in df.columns:
         raise ValueError(
-            "Feast training data is missing:\n"
-            + "\n".join(sorted(missing))
+            "target_aqi is missing from training source."
         )
 
-    # ========================================================
-    # CRITICAL:
-    # target_aqi MUST NOT be in X.
-    # ========================================================
+    if "us_aqi" in FEATURE_COLUMNS:
+        raise ValueError(
+            "us_aqi must not be used as a model feature."
+        )
 
-    X = training_df[
-        FEATURE_COLUMNS
-    ].copy()
+    if "target_aqi" in FEATURE_COLUMNS:
+        raise ValueError(
+            "target_aqi must not be used as a model feature."
+        )
 
-    y = training_df[
-        "target_aqi"
-    ].copy()
+    # --------------------------------------------------------
+    # NUMERIC CONVERSION
+    # --------------------------------------------------------
 
-    # Ensure target is numeric.
-    y = pd.to_numeric(
-        y,
+    for column in FEATURE_COLUMNS:
+        df[column] = pd.to_numeric(
+            df[column],
+            errors="coerce",
+        )
+
+    df["target_aqi"] = pd.to_numeric(
+        df["target_aqi"],
         errors="coerce",
     )
 
-    valid = (
-        y.notna()
-        & ~X.isna().any(axis=1)
+    # --------------------------------------------------------
+    # REMOVE INVALID ROWS
+    # --------------------------------------------------------
+
+    before = len(df)
+
+    valid_mask = (
+        df["target_aqi"].notna()
+        & ~df[FEATURE_COLUMNS]
+            .isna()
+            .any(axis=1)
     )
 
-    X = X.loc[valid].reset_index(
-        drop=True
+    df = df.loc[
+        valid_mask
+    ].reset_index(drop=True)
+
+    removed = before - len(df)
+
+    print(
+        "Rows removed because of NaN:",
+        removed,
     )
 
-    y = y.loc[valid].reset_index(
-        drop=True
-    )
-
-    timestamps = (
-        training_df.loc[
-            valid,
-            "event_timestamp",
-        ]
-        .reset_index(drop=True)
-    )
-
-    if len(X) < 100:
+    if len(df) < 100:
         raise ValueError(
-            f"Insufficient training rows: {len(X)}"
+            f"Insufficient training rows: {len(df)}"
         )
+
+    # --------------------------------------------------------
+    # FINAL X / y
+    # --------------------------------------------------------
+
+    X = df[
+        FEATURE_COLUMNS
+    ].copy()
+
+    y = df[
+        "target_aqi"
+    ].copy()
+
+    timestamps = df[
+        "timestamp"
+    ].copy()
+
+    locations = df[
+        "location_id"
+    ].copy()
+
+    # --------------------------------------------------------
+    # FINAL SAFETY CHECKS
+    # --------------------------------------------------------
 
     if X.shape[1] != 70:
         raise ValueError(
-            f"Expected 70 features, "
+            f"Expected 70 model features; "
             f"received {X.shape[1]}"
         )
 
     if "target_aqi" in X.columns:
         raise ValueError(
-            "target_aqi leaked into model inputs."
+            "CRITICAL: target_aqi leaked into X."
         )
 
     if "us_aqi" in X.columns:
         raise ValueError(
-            "us_aqi must not be used as a separate "
-            "model input because it is not part of "
-            "the 70-feature model schema."
+            "CRITICAL: us_aqi leaked into X."
+        )
+
+    if X.isna().any().any():
+        raise ValueError(
+            "X still contains NaN values."
+        )
+
+    if y.isna().any():
+        raise ValueError(
+            "y still contains NaN values."
         )
 
     print(
-        "Feast training rows:",
+        "Training rows:",
         len(X),
     )
 
     print(
-        "Feast model features:",
+        "Model features:",
         X.shape[1],
     )
 
@@ -348,7 +471,28 @@ def load_training_data():
         timestamps.max(),
     )
 
-    return X, y, timestamps
+    print(
+        "✓ X contains exactly 70 features"
+    )
+
+    print(
+        "✓ target_aqi is not in X"
+    )
+
+    print(
+        "✓ us_aqi is not in X"
+    )
+
+    print(
+        "✓ Historical training data loaded"
+    )
+
+    return (
+        X,
+        y,
+        timestamps,
+        locations,
+    )
 
 
 # ============================================================
@@ -373,27 +517,27 @@ def chronological_split(
 
     X_train = X.iloc[
         :train_end
-    ]
+    ].copy()
 
     y_train = y.iloc[
         :train_end
-    ]
+    ].copy()
 
     X_val = X.iloc[
         train_end:val_end
-    ]
+    ].copy()
 
     y_val = y.iloc[
         train_end:val_end
-    ]
+    ].copy()
 
     X_test = X.iloc[
         val_end:
-    ]
+    ].copy()
 
     y_test = y.iloc[
         val_end:
-    ]
+    ].copy()
 
     print("=" * 70)
     print("CHRONOLOGICAL SPLIT")
@@ -523,11 +667,39 @@ def build_models():
 
 def train():
 
+    print("=" * 70)
+    print("PEARLS AQI MODEL TRAINING")
+    print("=" * 70)
+
+    print(
+        "MLflow:",
+        MLFLOW_TRACKING_URI,
+    )
+
+    print(
+        "Feature repository:",
+        FEATURE_REPO,
+    )
+
+    print(
+        "Feature file:",
+        FEATURE_FILE,
+    )
+
+    # --------------------------------------------------------
+    # LOAD DATA
+    # --------------------------------------------------------
+
     (
         X,
         y,
         timestamps,
+        locations,
     ) = load_training_data()
+
+    # --------------------------------------------------------
+    # SPLIT
+    # --------------------------------------------------------
 
     (
         X_train,
@@ -542,15 +714,19 @@ def train():
         timestamps,
     )
 
+    # --------------------------------------------------------
+    # BUILD MODELS
+    # --------------------------------------------------------
+
     models = build_models()
 
     results = []
 
     trained_models = {}
 
-    # ========================================================
+    # --------------------------------------------------------
     # TRAIN CANDIDATES
-    # ========================================================
+    # --------------------------------------------------------
 
     for model_name, model in models.items():
 
@@ -587,6 +763,10 @@ def train():
                 test_pred,
             )
 
+            # ------------------------------------------------
+            # LOG PARAMETERS
+            # ------------------------------------------------
+
             mlflow.log_param(
                 "model_name",
                 model_name,
@@ -602,22 +782,50 @@ def train():
                 "target_aqi",
             )
 
+            mlflow.log_param(
+                "data_source",
+                "data/processed/aqi_features.parquet",
+            )
+
+            mlflow.log_param(
+                "feast_feature_service",
+                "aqi_model_features",
+            )
+
+            mlflow.log_param(
+                "split",
+                "70/15/15 chronological",
+            )
+
+            # ------------------------------------------------
+            # LOG METRICS
+            # ------------------------------------------------
+
             mlflow.log_metrics(
                 {
                     "validation_rmse":
                         val_metrics["rmse"],
+
                     "validation_mae":
                         val_metrics["mae"],
+
                     "validation_r2":
                         val_metrics["r2"],
+
                     "test_rmse":
                         test_metrics["rmse"],
+
                     "test_mae":
                         test_metrics["mae"],
+
                     "test_r2":
                         test_metrics["r2"],
                 }
             )
+
+            # ------------------------------------------------
+            # LOG MODEL
+            # ------------------------------------------------
 
             if model_name == "xgboost":
 
@@ -635,21 +843,32 @@ def train():
                     input_example=X_train.head(2),
                 )
 
+            # ------------------------------------------------
+            # STORE RESULT
+            # ------------------------------------------------
+
             results.append(
                 {
                     "model": model_name,
+
                     "validation_rmse":
                         val_metrics["rmse"],
+
                     "validation_mae":
                         val_metrics["mae"],
+
                     "validation_r2":
                         val_metrics["r2"],
+
                     "test_rmse":
                         test_metrics["rmse"],
+
                     "test_mae":
                         test_metrics["mae"],
+
                     "test_r2":
                         test_metrics["r2"],
+
                     "run_id":
                         run.info.run_id,
                 }
@@ -659,8 +878,38 @@ def train():
                 model_name
             ] = model
 
+            print(
+                "Validation RMSE:",
+                val_metrics["rmse"],
+            )
+
+            print(
+                "Validation MAE:",
+                val_metrics["mae"],
+            )
+
+            print(
+                "Validation R²:",
+                val_metrics["r2"],
+            )
+
+            print(
+                "Test RMSE:",
+                test_metrics["rmse"],
+            )
+
+            print(
+                "Test MAE:",
+                test_metrics["mae"],
+            )
+
+            print(
+                "Test R²:",
+                test_metrics["r2"],
+            )
+
     # ========================================================
-    # SELECT WINNER
+    # MODEL COMPARISON
     # ========================================================
 
     results_df = (
@@ -670,22 +919,6 @@ def train():
         )
         .reset_index(drop=True)
     )
-
-    winner = (
-        results_df.iloc[0]
-    )
-
-    winner_name = winner[
-        "model"
-    ]
-
-    winner_run_id = winner[
-        "run_id"
-    ]
-
-    winner_model = trained_models[
-        winner_name
-    ]
 
     print("\n" + "=" * 70)
     print("MODEL COMPARISON")
@@ -705,7 +938,24 @@ def train():
         ].to_string(index=False)
     )
 
-    print("\nWINNER:", winner_name)
+    winner = results_df.iloc[0]
+
+    winner_name = winner[
+        "model"
+    ]
+
+    winner_run_id = winner[
+        "run_id"
+    ]
+
+    winner_model = trained_models[
+        winner_name
+    ]
+
+    print(
+        "\nWINNER:",
+        winner_name,
+    )
 
     # ========================================================
     # REGISTER WINNER
@@ -730,11 +980,19 @@ def train():
 
     client = mlflow.MlflowClient()
 
+    # --------------------------------------------------------
+    # CHAMPION ALIAS
+    # --------------------------------------------------------
+
     client.set_registered_model_alias(
         MODEL_NAME,
-        "champion",
+        MODEL_ALIAS,
         version,
     )
+
+    # --------------------------------------------------------
+    # TAGS
+    # --------------------------------------------------------
 
     client.set_model_version_tag(
         MODEL_NAME,
@@ -764,6 +1022,20 @@ def train():
         "target_aqi",
     )
 
+    client.set_model_version_tag(
+        MODEL_NAME,
+        version,
+        "feast_feature_service",
+        "aqi_model_features",
+    )
+
+    client.set_model_version_tag(
+        MODEL_NAME,
+        version,
+        "us_aqi_used_as_input",
+        "false",
+    )
+
     print(
         "Registered model:",
         MODEL_NAME,
@@ -779,8 +1051,13 @@ def train():
         winner_name,
     )
 
+    print(
+        "Champion alias:",
+        f"{MODEL_NAME}@{MODEL_ALIAS}",
+    )
+
     # ========================================================
-    # SAVE LOCAL CHAMPION COPY
+    # SAVE LOCAL CHAMPION
     # ========================================================
 
     champion_path = (
@@ -793,47 +1070,94 @@ def train():
         / "champion_metadata.json"
     )
 
-    import joblib
-
     joblib.dump(
         winner_model,
         champion_path,
     )
 
     metadata = {
-        "model_name": MODEL_NAME,
-        "model_type": winner_name,
-        "mlflow_run_id": winner_run_id,
-        "mlflow_version": version,
-        "mlflow_alias": "champion",
-        "feature_count": 70,
-        "features": FEATURE_COLUMNS,
-        "target": "target_aqi",
-        "validation_rmse": float(
-            winner["validation_rmse"]
-        ),
-        "validation_mae": float(
-            winner["validation_mae"]
-        ),
-        "validation_r2": float(
-            winner["validation_r2"]
-        ),
-        "test_rmse": float(
-            winner["test_rmse"]
-        ),
-        "test_mae": float(
-            winner["test_mae"]
-        ),
-        "test_r2": float(
-            winner["test_r2"]
-        ),
+        "model_name":
+            MODEL_NAME,
+
+        "model_type":
+            winner_name,
+
+        "mlflow_tracking_uri":
+            MLFLOW_TRACKING_URI,
+
+        "mlflow_run_id":
+            winner_run_id,
+
+        "mlflow_version":
+            version,
+
+        "mlflow_alias":
+            MODEL_ALIAS,
+
+        "feature_count":
+            70,
+
+        "features":
+            FEATURE_COLUMNS,
+
+        "target":
+            "target_aqi",
+
+        "us_aqi_used_as_input":
+            False,
+
+        "feast_feature_service":
+            "aqi_model_features",
+
+        "validation_rmse":
+            float(
+                winner[
+                    "validation_rmse"
+                ]
+            ),
+
+        "validation_mae":
+            float(
+                winner[
+                    "validation_mae"
+                ]
+            ),
+
+        "validation_r2":
+            float(
+                winner[
+                    "validation_r2"
+                ]
+            ),
+
+        "test_rmse":
+            float(
+                winner[
+                    "test_rmse"
+                ]
+            ),
+
+        "test_mae":
+            float(
+                winner[
+                    "test_mae"
+                ]
+            ),
+
+        "test_r2":
+            float(
+                winner[
+                    "test_r2"
+                ]
+            ),
     }
 
     metadata_path.write_text(
         json.dumps(
             metadata,
             indent=2,
-        )
+        ),
+        encoding="utf-8",
     )
 
     print(
@@ -847,22 +1171,48 @@ def train():
     )
 
     # ========================================================
-    # FINAL VALIDATION
+    # FINAL REGISTRY VALIDATION
     # ========================================================
+
+    print("\n" + "=" * 70)
+    print("FINAL MODEL REGISTRY VALIDATION")
+    print("=" * 70)
 
     champion_info = (
         client.get_model_version_by_alias(
             MODEL_NAME,
-            "champion",
+            MODEL_ALIAS,
         )
     )
 
-    assert str(
-        champion_info.version
-    ) == version
+    print(
+        "Registered version:",
+        champion_info.version,
+    )
+
+    print(
+        "Registered run:",
+        champion_info.run_id,
+    )
+
+    print(
+        "Registered tags:",
+        champion_info.tags,
+    )
 
     assert (
-        len(FEATURE_COLUMNS) == 70
+        str(champion_info.version)
+        == version
+    )
+
+    assert (
+        champion_info.run_id
+        == winner_run_id
+    )
+
+    assert (
+        len(FEATURE_COLUMNS)
+        == 70
     )
 
     assert (
@@ -875,12 +1225,20 @@ def train():
         not in FEATURE_COLUMNS
     )
 
+    # ========================================================
+    # FINAL OUTPUT
+    # ========================================================
+
     print("\n" + "=" * 70)
     print("TRAINING PIPELINE COMPLETED")
     print("=" * 70)
 
     print(
-        "Feast historical retrieval: PASS"
+        "Historical data loading: PASS"
+    )
+
+    print(
+        "Feast feature contract: PASS"
     )
 
     print(
@@ -889,6 +1247,23 @@ def train():
 
     print(
         "target_aqi excluded from X: PASS"
+    )
+
+    print(
+        "us_aqi excluded from X: PASS"
+    )
+
+    print(
+        "Chronological split: PASS"
+    )
+
+    print(
+        "Candidate training: PASS"
+    )
+
+    print(
+        "Winner:",
+        winner_name,
     )
 
     print(
@@ -901,11 +1276,27 @@ def train():
 
     print(
         "Champion:",
-        winner_name,
-        "version",
+        f"{MODEL_NAME}@{MODEL_ALIAS}",
+    )
+
+    print(
+        "Version:",
         version,
     )
 
+    print(
+        "Run:",
+        winner_run_id,
+    )
+
+    print(
+        "Training pipeline: PASS"
+    )
+
+
+# ============================================================
+# MAIN
+# ============================================================
 
 if __name__ == "__main__":
     train()
