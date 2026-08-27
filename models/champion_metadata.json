@@ -2,8 +2,8 @@
   "model_name": "Pearls_AQI_XGBoost",
   "model_type": "xgboost",
   "mlflow_tracking_uri": "http://127.0.0.1:5000",
-  "mlflow_run_id": "9551f52f8dff4a378c878ad04c8b0c8b",
-  "mlflow_version": "2",
+  "mlflow_run_id": "502dc251b90045a59cfd1d72ed90fd03",
+  "mlflow_version": "3",
   "mlflow_alias": "champion",
   "feature_count": 70,
   "features": [

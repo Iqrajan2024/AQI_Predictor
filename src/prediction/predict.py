@@ -92,6 +92,8 @@ MLFLOW_MODEL_URI = (
     f"models:/{MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}"
 )
 
+mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
+
 # ============================================================
 # LOCATION
 # ============================================================
@@ -222,7 +224,83 @@ FEATURE_COLUMNS = [
 
 
 assert len(FEATURE_COLUMNS) == 70
+assert "target_aqi" not in FEATURE_COLUMNS
+assert "us_aqi" not in FEATURE_COLUMNS
 
+assert len(set(FEATURE_COLUMNS)) == 70
+
+def validate_prediction_feature_contract(store):
+    print()
+    print("=" * 70)
+    print("PREDICTION FEATURE CONTRACT")
+    print("=" * 70)
+
+    service = store.get_feature_service(
+        "aqi_model_features"
+    )
+
+    feast_features = [
+        feature.name
+        for projection in service.feature_view_projections
+        for feature in projection.features
+    ]
+
+    expected = set(FEATURE_COLUMNS)
+    actual = set(feast_features)
+
+    print("Expected:", len(expected))
+    print("Feast:", len(actual))
+
+    if len(feast_features) != 70:
+        raise ValueError(
+            f"Feast exposes {len(feast_features)} features; "
+            "expected 70."
+        )
+
+    duplicates = sorted(
+        {
+            x
+            for x in feast_features
+            if feast_features.count(x) > 1
+        }
+    )
+
+    if duplicates:
+        raise ValueError(
+            f"Duplicate Feast features: {duplicates}"
+        )
+
+    missing = sorted(expected - actual)
+    extra = sorted(actual - expected)
+
+    if missing:
+        raise ValueError(
+            "Missing Feast prediction features:\n"
+            + "\n".join(missing)
+        )
+
+    if extra:
+        raise ValueError(
+            "Unexpected Feast prediction features:\n"
+            + "\n".join(extra)
+        )
+
+    if "target_aqi" in actual:
+        raise ValueError(
+            "target_aqi MUST NOT be in prediction features."
+        )
+
+    if "us_aqi" in actual:
+        raise ValueError(
+            "us_aqi MUST NOT be in prediction features."
+        )
+
+    print("✓ 70 features")
+    print("✓ No duplicates")
+    print("✓ Exact feature match")
+    print("✓ target_aqi excluded")
+    print("✓ us_aqi excluded")
+    print("✓ PREDICTION FEATURE CONTRACT: PASS")
 
 # ============================================================
 # HEADER
@@ -381,6 +459,8 @@ def load_feast():
     store = FeatureStore(
         repo_path=str(FEATURE_REPO)
     )
+
+    validate_prediction_feature_contract(store)
 
     return store
 
@@ -601,110 +681,405 @@ def merge_api_data(
 # FEAST HISTORICAL CONTEXT
 # ============================================================
 
-def get_feast_historical_context(
-    store,
-    timestamps,
-):
 
-    print("\n" + "=" * 70)
-    print("LOADING 70 FEATURES FROM FEAST")
+def get_historical_context(
+    project_root,
+    latest_timestamp,
+):
+    """
+    Load the recent historical feature context required for
+    recursive prediction.
+
+    Feast is still used to validate the 70-feature contract.
+    The historical feature values are read directly from the
+    feature-engineered Parquet source to avoid the expensive
+    Feast/DuckDB point-in-time join during prediction.
+    """
+
+    print("=" * 70)
+    print("LOADING HISTORICAL FEATURE CONTEXT")
     print("=" * 70)
 
-    entity_df = pd.DataFrame(
-        {
-            "location_id": [
-                LOCATION_ID
-            ] * len(timestamps),
+    latest_timestamp = pd.to_datetime(
+        latest_timestamp,
+        utc=True,
+    ).floor("h")
 
-            "event_timestamp": (
-                pd.to_datetime(
-                    timestamps,
-                    utc=True,
-                )
-            ),
-        }
+    # --------------------------------------------------------
+    # FEAST CONTRACT VALIDATION
+    # --------------------------------------------------------
+
+    store = FeatureStore(
+        repo_path=str(FEATURE_REPO)
     )
 
-    feature_refs = [
-        f"aqi_features:{feature}"
-        for feature in FEATURE_COLUMNS
+    service = store.get_feature_service(
+        "aqi_model_features"
+    )
+
+    feast_features = [
+        feature.name
+        for projection in service.feature_view_projections
+        for feature in projection.features
     ]
 
-    # Add us_aqi separately because it is
-    # historical state used for recursive forecasting,
-    # but is NOT a model input.
-    feature_refs.append(
-        "aqi_features:us_aqi"
-    )
-
-    feast_df = (
-        store
-        .get_historical_features(
-            entity_df=entity_df,
-            features=feature_refs,
-        )
-        .to_df()
-    )
-
-    feast_df["event_timestamp"] = (
-        pd.to_datetime(
-            feast_df["event_timestamp"],
-            utc=True,
-        )
-    )
-
-    missing = [
-        feature
-        for feature in FEATURE_COLUMNS
-        if feature not in feast_df.columns
-    ]
-
-    if missing:
-        raise ValueError(
-            "Feast is missing model features:\n"
-            + "\n".join(missing)
-        )
-
-    if "us_aqi" not in feast_df.columns:
-        raise ValueError(
-            "Feast did not return us_aqi."
-        )
-
-    if len(FEATURE_COLUMNS) != 70:
-        raise ValueError(
-            "Feature count is not 70."
-        )
-
-    feast_df = (
-        feast_df
-        .sort_values(
-            "event_timestamp"
-        )
-        .reset_index(drop=True)
-    )
-
-    if feast_df.empty:
-        raise ValueError(
-            "Feast returned no historical rows."
-        )
+    print("=" * 70)
+    print("PREDICTION FEATURE CONTRACT")
+    print("=" * 70)
 
     print(
-        "Feast historical rows:",
-        len(feast_df),
-    )
-
-    print(
-        "Feast model features:",
+        "Expected:",
         len(FEATURE_COLUMNS),
     )
 
     print(
-        "Feast historical feature loading: PASS"
+        "Feast:",
+        len(feast_features),
     )
 
-    return feast_df
+    if len(feast_features) != 70:
+        raise ValueError(
+            f"Feast exposes {len(feast_features)} "
+            "features instead of 70."
+        )
 
+    if len(set(feast_features)) != 70:
+        raise ValueError(
+            "Duplicate Feast features detected."
+        )
 
+    if set(feast_features) != set(FEATURE_COLUMNS):
+
+        missing = sorted(
+            set(FEATURE_COLUMNS)
+            - set(feast_features)
+        )
+
+        extra = sorted(
+            set(feast_features)
+            - set(FEATURE_COLUMNS)
+        )
+
+        raise ValueError(
+            "Prediction feature contract mismatch.\n"
+            f"Missing: {missing}\n"
+            f"Extra: {extra}"
+        )
+
+    if "target_aqi" in feast_features:
+        raise ValueError(
+            "target_aqi must not be a model feature."
+        )
+
+    if "us_aqi" in feast_features:
+        raise ValueError(
+            "us_aqi must not be a model feature."
+        )
+
+    print("✓ 70 features")
+    print("✓ No duplicates")
+    print("✓ Exact feature match")
+    print("✓ target_aqi excluded")
+    print("✓ us_aqi excluded")
+    print("✓ PREDICTION FEATURE CONTRACT: PASS")
+
+    # --------------------------------------------------------
+    # SOURCE FILE
+    # --------------------------------------------------------
+
+    source_path = (
+        project_root
+        / "data"
+        / "processed"
+        / "aqi_features.parquet"
+    )
+
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"Feature source not found:\n{source_path}"
+        )
+
+    print(
+        "Feature source:",
+        source_path,
+    )
+
+    # --------------------------------------------------------
+    # CHECK SOURCE RANGE FIRST
+    # --------------------------------------------------------
+
+    timestamp_df = pd.read_parquet(
+        source_path,
+        columns=["timestamp"],
+    )
+
+    timestamp_df["timestamp"] = pd.to_datetime(
+        timestamp_df["timestamp"],
+        utc=True,
+    )
+
+    source_min = timestamp_df["timestamp"].min()
+    source_max = timestamp_df["timestamp"].max()
+
+    del timestamp_df
+
+    print(
+        "Source minimum:",
+        source_min,
+    )
+
+    print(
+        "Source maximum:",
+        source_max,
+    )
+
+    # --------------------------------------------------------
+    # CRITICAL VALIDATION
+    # --------------------------------------------------------
+
+    if latest_timestamp > source_max:
+        raise ValueError(
+            "Current API timestamp is newer than the "
+            "historical feature source.\n"
+            f"API timestamp: {latest_timestamp}\n"
+            f"Source maximum: {source_max}\n\n"
+            "The historical feature source must be updated "
+            "before recursive prediction can continue."
+        )
+
+    # --------------------------------------------------------
+    # REQUIRED HISTORY
+    # --------------------------------------------------------
+
+    # Largest model lag = 72 hours.
+    # Rolling 24h features also require sufficient context.
+    #
+    # Use 8 days to provide a safe historical window.
+    history_start = (
+        latest_timestamp
+        - pd.Timedelta(days=8)
+    )
+
+    print(
+        "Required historical context:",
+        history_start,
+        "->",
+        latest_timestamp,
+    )
+
+    # --------------------------------------------------------
+    # READ ONLY REQUIRED COLUMNS
+    # --------------------------------------------------------
+
+    columns = [
+        "location_id",
+        "timestamp",
+        *FEATURE_COLUMNS,
+    ]
+
+    feast_history = pd.read_parquet(
+        source_path,
+        columns=columns,
+        filters=[
+            [
+                (
+                    "timestamp",
+                    ">=",
+                    history_start.to_pydatetime(),
+                ),
+                (
+                    "timestamp",
+                    "<=",
+                    latest_timestamp.to_pydatetime(),
+                ),
+            ]
+        ],
+    )
+
+    # --------------------------------------------------------
+    # TIMESTAMP
+    # --------------------------------------------------------
+
+    feast_history["event_timestamp"] = pd.to_datetime(
+        feast_history["timestamp"],
+        utc=True,
+    )
+
+    feast_history = feast_history.drop(
+        columns=["timestamp"]
+    )
+
+    # --------------------------------------------------------
+    # SORT / DEDUPLICATE
+    # --------------------------------------------------------
+
+    feast_history = (
+        feast_history
+        .sort_values(
+            "event_timestamp"
+        )
+        .drop_duplicates(
+            subset=[
+                "location_id",
+                "event_timestamp",
+            ],
+            keep="last",
+        )
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # NUMERIC FEATURES
+    # --------------------------------------------------------
+
+    feast_history[FEATURE_COLUMNS] = (
+        feast_history[FEATURE_COLUMNS]
+        .apply(
+            pd.to_numeric,
+            errors="coerce",
+        )
+    )
+
+    # --------------------------------------------------------
+    # MISSING FEATURE CHECK
+    # --------------------------------------------------------
+
+    missing_features = sorted(
+        set(FEATURE_COLUMNS)
+        - set(feast_history.columns)
+    )
+
+    if missing_features:
+        raise ValueError(
+            "Historical source is missing model features:\n"
+            + "\n".join(missing_features)
+        )
+
+    # --------------------------------------------------------
+    # DROP INVALID ROWS
+    # --------------------------------------------------------
+
+    before = len(feast_history)
+
+    feast_history = (
+        feast_history
+        .dropna(
+            subset=FEATURE_COLUMNS
+        )
+        .reset_index(drop=True)
+    )
+
+    removed = before - len(feast_history)
+
+    if removed:
+        print(
+            "Rows removed because of missing features:",
+            removed,
+        )
+
+    # --------------------------------------------------------
+    # HISTORY SIZE
+    # --------------------------------------------------------
+
+    if len(feast_history) < 72:
+        raise ValueError(
+            "Insufficient historical context.\n"
+            f"Required: at least 72 rows\n"
+            f"Received: {len(feast_history)}"
+        )
+
+    # --------------------------------------------------------
+    # HOURLY CONTINUITY
+    # --------------------------------------------------------
+
+    deltas = (
+        feast_history["event_timestamp"]
+        .diff()
+        .dropna()
+    )
+
+    expected_delta = pd.Timedelta(hours=1)
+
+    if not deltas.eq(expected_delta).all():
+
+        bad_rows = feast_history.loc[
+            deltas.index[
+                deltas != expected_delta
+            ]
+        ]
+
+        raise ValueError(
+            "Historical feature source contains "
+            "non-hourly gaps.\n"
+            f"First problematic rows:\n{bad_rows.head()}"
+        )
+
+    # --------------------------------------------------------
+    # FINAL MODEL INPUT VALIDATION
+    # --------------------------------------------------------
+
+    if "target_aqi" in feast_history.columns:
+        raise ValueError(
+            "target_aqi unexpectedly present in prediction "
+            "feature context."
+        )
+
+    if "us_aqi" in feast_history.columns:
+        raise ValueError(
+            "us_aqi unexpectedly present in prediction "
+            "feature context."
+        )
+
+    actual_feature_columns = [
+        c
+        for c in feast_history.columns
+        if c not in [
+            "location_id",
+            "event_timestamp",
+        ]
+    ]
+
+    if actual_feature_columns != FEATURE_COLUMNS:
+        raise ValueError(
+            "Prediction feature ordering mismatch."
+        )
+
+    # --------------------------------------------------------
+    # OUTPUT
+    # --------------------------------------------------------
+
+    print(
+        "Historical context rows:",
+        len(feast_history),
+    )
+
+    print(
+        "Historical context:",
+        feast_history[
+            "event_timestamp"
+        ].min(),
+        "->",
+        feast_history[
+            "event_timestamp"
+        ].max(),
+    )
+
+    print(
+        "Historical model features:",
+        len(FEATURE_COLUMNS),
+    )
+
+    print("✓ Direct Parquet feature retrieval")
+    print("✓ No Feast/DuckDB historical join")
+    print("✓ 70 model features")
+    print("✓ target_aqi excluded")
+    print("✓ us_aqi excluded")
+    print("✓ Hourly continuity verified")
+    print("✓ Historical context: PASS")
+
+    return feast_history          
+         
+    
 # ============================================================
 # CREATE FUTURE FEATURES
 # ============================================================
@@ -889,6 +1264,37 @@ def generate_forecast(
     feast_history,
     api_df,
 ):
+    # ========================================================
+    # NORMALIZE HISTORICAL TIMESTAMP
+    # ========================================================
+
+    feast_history = feast_history.copy()
+
+    if "event_timestamp" not in feast_history.columns:
+        if "timestamp" in feast_history.columns:
+            feast_history = feast_history.rename(
+                columns={"timestamp": "event_timestamp"}
+            )
+        elif "datetime" in feast_history.columns:
+            feast_history = feast_history.rename(
+                columns={"datetime": "event_timestamp"}
+            )
+        else:
+            raise RuntimeError(
+                "Historical Feast dataframe has no timestamp column. "
+                f"Columns: {list(feast_history.columns)}"
+            )
+
+    feast_history["event_timestamp"] = pd.to_datetime(
+        feast_history["event_timestamp"],
+        utc=True,
+    )
+
+    feast_history = (
+        feast_history
+        .sort_values("event_timestamp")
+        .reset_index(drop=True)
+    )
 
     now_utc = (
         pd.Timestamp.now(tz="UTC")
@@ -1096,6 +1502,69 @@ def generate_forecast(
         # ----------------------------------------------
         # Predict
         # ----------------------------------------------
+         
+        def validate_prediction_features(
+            X,
+        ):
+            if not isinstance(X, pd.DataFrame):
+                X = pd.DataFrame(X)
+
+            missing = sorted(
+                set(FEATURE_COLUMNS) - set(X.columns)
+            )
+
+            extra = sorted(
+                set(X.columns) - set(FEATURE_COLUMNS)
+            )
+
+            if missing:
+                raise ValueError(
+                    "Prediction input is missing features:\n"
+                    + "\n".join(missing)
+                )
+
+            if extra:
+                X = X.drop(
+                    columns=extra
+                )
+
+            X = X[
+                FEATURE_COLUMNS
+            ].copy()
+
+            if X.shape[1] != 70:
+                raise ValueError(
+                    f"Prediction requires 70 features; "
+                    f"received {X.shape[1]}"
+                )
+
+            if X.isna().any().any():
+                missing_values = (
+                    X.columns[
+                        X.isna().any()
+                    ].tolist()
+                )
+
+                raise ValueError(
+                    "Prediction input contains NaN values:\n"
+                    + "\n".join(missing_values)
+                )
+
+            if "target_aqi" in X.columns:
+                raise ValueError(
+                    "target_aqi leaked into prediction input."
+                )
+
+            if "us_aqi" in X.columns:
+                raise ValueError(
+                    "us_aqi leaked into prediction input."
+                )
+
+            return X
+
+        X = validate_prediction_features(
+            X
+        )
 
         prediction = model.predict(X)
 
@@ -1463,17 +1932,62 @@ def main():
         .tolist()
     )
 
-    feast_history = (
-        get_feast_historical_context(
-            store,
-            history_timestamps,
-        )
+    api_df["timestamp"] = pd.to_datetime(
+        api_df["timestamp"],
+        utc=True,
     )
 
+    latest_api_timestamp = (
+        api_df["timestamp"]
+        .max()
+        .floor("h")
+    )
+
+    print(
+        "Latest API timestamp:",
+        latest_api_timestamp,
+    )
+
+    feast_history = get_historical_context(
+        PROJECT_ROOT,
+        latest_api_timestamp,
+    )
+        
     # ========================================================
     # FORECAST
     # ========================================================
-
+     
+    print("=" * 70)
+    print("HISTORICAL CONTEXT VALIDATION")
+    print("=" * 70)
+    print("Rows:", len(feast_history))
+    print("Columns:", len(feast_history.columns))
+    print("Has event_timestamp:", "event_timestamp" in feast_history.columns)
+    print(
+        "Timestamp range:",
+        feast_history["event_timestamp"].min()
+        if "event_timestamp" in feast_history.columns
+        else "MISSING",
+        "->",
+        feast_history["event_timestamp"].max()
+        if "event_timestamp" in feast_history.columns
+        else "MISSING",
+    )
+    print(
+        "Missing model features:",
+        sorted(
+            set(FEATURE_COLUMNS)
+            - set(feast_history.columns)
+        ),
+    )
+    print(
+        "Has target_aqi:",
+        "target_aqi" in feast_history.columns,
+    )
+    print(
+        "Has us_aqi:",
+        "us_aqi" in feast_history.columns,
+    ) 
     (
         forecast_df,
         daily_forecast,
