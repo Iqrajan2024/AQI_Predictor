@@ -1415,6 +1415,81 @@ def generate_forecast(
         history.copy()
     )
 
+    # --------------------------------------------------------
+    # FEAST AQI COVERAGE VALIDATION
+    # --------------------------------------------------------
+
+    missing_aqi_timestamps = (
+        history.loc[
+            history["us_aqi"].isna(),
+            "timestamp"
+        ]
+        .tolist()
+    )
+
+    if missing_aqi_timestamps:
+        raise ValueError(
+            "Missing Feast us_aqi values for historical "
+            "prediction context.\n"
+            f"Missing timestamps: "
+            f"{missing_aqi_timestamps[:10]}"
+        )
+
+    if history["us_aqi"].isna().any():
+        raise ValueError(
+            "Historical prediction context contains "
+            "null us_aqi values."
+        )
+
+    # --------------------------------------------------------
+    # HISTORY TIMESTAMP VALIDATION
+    # --------------------------------------------------------
+
+    expected_last_history_timestamp = (
+        forecast_start
+        - pd.Timedelta(hours=1)
+    )
+
+    if history.empty:
+        raise ValueError(
+            "Historical API context is empty."
+        )
+
+    actual_last_history_timestamp = (
+        history["timestamp"].max()
+    )
+
+    if (
+        actual_last_history_timestamp
+        != expected_last_history_timestamp
+    ):
+        raise ValueError(
+            "Historical context does not reach the "
+            "last hour before forecast.\n"
+            f"Expected: {expected_last_history_timestamp}\n"
+            f"Received: {actual_last_history_timestamp}"
+        )
+
+    if len(history) != 96:
+        raise ValueError(
+            "Expected exactly 96 historical API rows.\n"
+            f"Received: {len(history)}"
+        )
+
+    history_deltas = (
+        history["timestamp"]
+        .diff()
+        .dropna()
+    )
+
+    if not history_deltas.eq(
+        pd.Timedelta(hours=1)
+    ).all():
+        raise ValueError(
+            "API historical context contains "
+            "non-hourly gaps."
+        )
+
     # ========================================================
     # RECURSIVE 72 HOURS
     # ========================================================
@@ -1430,51 +1505,63 @@ def generate_forecast(
             future_row["timestamp"]
         )
 
-        # ----------------------------------------------
-        # Feature construction
-        # ----------------------------------------------
-        
+        # --------------------------------------------------------
+        # FEATURE TIMESTAMP
+        # --------------------------------------------------------
+        #
+        # The trained target is:
+        #
+        #     target_aqi = us_aqi.shift(-1)
+        #
+        # Therefore features at timestamp T predict AQI
+        # at timestamp T + 1 hour.
+        #
+        # For forecast timestamp F, the model input must
+        # correspond to F - 1 hour.
+        # --------------------------------------------------------
+
         anchor_timestamp = (
-                    prediction_timestamp
-                    - pd.Timedelta(hours=1)
-                )
-        if step == 0:
+            prediction_timestamp
+            - pd.Timedelta(hours=1)
+        )
 
-            X = feast_history[
+        # --------------------------------------------------------
+        # BUILD FEATURES FROM THE COMPLETE CURRENT STATE
+        # --------------------------------------------------------
+
+        feature_frame = create_features(
+            working_history
+        )
+
+        anchor_rows = feature_frame[
+            feature_frame["timestamp"]
+            == anchor_timestamp
+        ]
+
+        if anchor_rows.empty:
+            raise ValueError(
+                "Missing feature anchor for prediction.\n"
+                f"Forecast timestamp: {prediction_timestamp}\n"
+                f"Required feature timestamp: {anchor_timestamp}\n"
+                f"Available range: "
+                f"{feature_frame['timestamp'].min()} -> "
+                f"{feature_frame['timestamp'].max()}"
+            )
+
+        row = (
+            anchor_rows
+            .iloc[-1]
+        )
+
+        X = (
+            row[
                 FEATURE_COLUMNS
-            ].copy()
-
-        else:
-
-            feature_frame = create_features(
-                working_history
-            )
-
-            anchor_rows = feature_frame[
-                feature_frame["timestamp"]
-                == anchor_timestamp
             ]
-        
+            .to_frame()
+            .T
+            .astype(float)
+        )
 
-            if anchor_rows.empty:
-                raise ValueError(
-                    "Missing feature anchor: "
-                    f"{anchor_timestamp}"
-                )
-
-            row = (
-                anchor_rows
-                .iloc[-1]
-            )
-
-            X = (
-                row[
-                    FEATURE_COLUMNS
-                ]
-                .to_frame()
-                .T
-                .astype(float)
-            )
 
         # ----------------------------------------------
         # EXACT 70 FEATURE CHECK
@@ -1601,7 +1688,7 @@ def generate_forecast(
 
         feature_record[
             "timestamp"
-        ] = prediction_timestamp
+        ] = anchor_timestamp
 
         feature_records.append(
             feature_record
@@ -1912,29 +1999,16 @@ def main():
         - pd.Timedelta(hours=96)
     )
 
-    history_timestamps = (
-        api_df[
-            (
-                api_df["timestamp"]
-                >= history_start
-            )
-            &
-            (
-                api_df["timestamp"]
-                < forecast_start
-            )
-        ]
-        [
-            "timestamp"
-        ]
-        .drop_duplicates()
-        .sort_values()
-        .tolist()
-    )
-
     api_df["timestamp"] = pd.to_datetime(
         api_df["timestamp"],
         utc=True,
+    )
+
+    api_df = (
+        api_df
+        .sort_values("timestamp")
+        .drop_duplicates("timestamp")
+        .reset_index(drop=True)
     )
 
     latest_api_timestamp = (
@@ -1942,6 +2016,7 @@ def main():
         .max()
         .floor("h")
     )
+
 
     print(
         "Latest API timestamp:",
