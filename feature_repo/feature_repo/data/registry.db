@@ -9,8 +9,8 @@ A
 __dummy"
 __dummy_idJ
 pearls_aqi
-â¿ŒÔĞÖî‚â¿ŒÔĞÖî‚1"$98eebc9f-b370-4208-ae1c-94181b8fecb2*«ÂÔØàé2‚
-€
+â¿ŒÔĞÖî‚â¿ŒÔĞÖî‚1"$8a53d815-3e44-4b79-9090-396e4594322e*Î–ÆÔğ”¼Õ2â
+Ì
 aqi_features
 pearls_aqiaqi_location"
 temperature_2m"
@@ -90,14 +90,15 @@ pm10_lag_6"
 pm2_5_change_1h"
 pm2_5_change_24h"
 pm10_change_1h"
-pm10_change_24h2€†°–:À	timestampZHFD:/Internship/pearls-aqi-predictor/data/processed/aqi_features.parquetŠ1feast.infra.offline_stores.file_source.FileSource¢aqi_features_source’•‚ÁÔğ¢–ô"•‚ÁÔğ¢–ô@b
-location_id’latest}
-â¿ŒÔè›ÿ‚«ÂÔ€š›
+pm10_change_24h2€†°–:Œ	timestampZHFD:/Internship/pearls-aqi-predictor/data/processed/aqi_features.parquet¢aqi_features_source’Î–ÆÔèÒ˜"Î–ÆÔèÒ˜@b
+location_id’latest
+â¿ŒÔè›ÿ‚Î–ÆÔˆÃªÕ
 ÒºÜ½ ğÖğô¹Ó
 ğô¹ÓÿÃÔ
 ÿÃÔÿÃÔ
 ÿÃÔÿÃÔ
-ÿÃÔÿÃÔ0:Ş
+ÿÃÔÿÃÔ
+ÿÃÔğëÒÔ0:Ş
 ¾
 aqi_model_features
 pearls_aqi›
