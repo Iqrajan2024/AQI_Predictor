@@ -511,8 +511,16 @@ def main():
 
     before_rows = len(df)
 
+    # --------------------------------------------------------
+    # IMPORTANT:
+    # Keep the latest row even though target_aqi is unavailable.
+    #
+    # Training requires target_aqi.
+    # Runtime prediction does NOT require target_aqi.
+    # --------------------------------------------------------
+
     df = df.dropna(
-        subset=FEATURE_COLUMNS + ["target_aqi"]
+        subset=FEATURE_COLUMNS
     ).reset_index(drop=True)
 
     removed_rows = before_rows - len(df)
@@ -521,6 +529,31 @@ def main():
     print("Rows removed:", removed_rows)
     print("Rows after cleanup:", len(df))
 
+    # target_aqi is allowed to be missing ONLY on the
+    # final/latest row because there is no future AQI yet.
+
+    target_missing = df["target_aqi"].isna()
+
+    if target_missing.sum() > 1:
+        raise ValueError(
+            "More than one target_aqi value is missing. "
+            "Only the latest row may have a missing target."
+        )
+
+    if target_missing.sum() == 1:
+
+        missing_target_index = df.index[target_missing][0]
+
+        if missing_target_index != df.index[-1]:
+            raise ValueError(
+                "Missing target_aqi is not on the latest row."
+            )
+
+        print(
+            "✓ Latest row retained for runtime prediction "
+            "(target_aqi unavailable by design)"
+        )
+        
     # ========================================================
     # FINAL VERIFICATION
     # ========================================================
@@ -547,7 +580,17 @@ def main():
 
     assert missing_values == 0
 
-    assert df["target_aqi"].isna().sum() == 0
+    target_missing_count = df["target_aqi"].isna().sum()
+
+    if target_missing_count > 1:
+        raise ValueError(
+            "More than one target_aqi value is missing."
+        )
+
+    if target_missing_count == 1:
+        assert pd.isna(df["target_aqi"].iloc[-1])
+
+    print("✓ Target validation passed")
 
     assert df["timestamp"].is_monotonic_increasing
 

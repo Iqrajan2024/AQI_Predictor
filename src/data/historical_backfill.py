@@ -36,7 +36,8 @@ LATITUDE = 34.008
 LONGITUDE = 71.5785
 
 START_DATE = "2024-08-01"
-END_DATE = "2026-08-01"
+
+END_DATE = "2026-08-29"
 
 WEATHER_URL = "https://archive-api.open-meteo.com/v1/archive"
 

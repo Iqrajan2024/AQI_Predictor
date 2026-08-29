@@ -875,6 +875,10 @@ def get_historical_context(
         "location_id",
         "timestamp",
         *FEATURE_COLUMNS,
+
+        # Required for recursive AQI state.
+        # NOT a model feature.
+        "us_aqi",
     ]
 
     feast_history = pd.read_parquet(
@@ -1024,11 +1028,7 @@ def get_historical_context(
             "feature context."
         )
 
-    if "us_aqi" in feast_history.columns:
-        raise ValueError(
-            "us_aqi unexpectedly present in prediction "
-            "feature context."
-        )
+    
 
     actual_feature_columns = [
         c
@@ -1036,12 +1036,29 @@ def get_historical_context(
         if c not in [
             "location_id",
             "event_timestamp",
+            "us_aqi",
         ]
     ]
 
     if actual_feature_columns != FEATURE_COLUMNS:
         raise ValueError(
             "Prediction feature ordering mismatch."
+        )
+
+    if "us_aqi" not in feast_history.columns:
+        raise ValueError(
+            "Historical context is missing us_aqi. "
+            "us_aqi is required for recursive AQI prediction state."
+        )
+
+    feast_history["us_aqi"] = pd.to_numeric(
+        feast_history["us_aqi"],
+        errors="coerce",
+    )
+
+    if feast_history["us_aqi"].isna().any():
+        raise ValueError(
+            "Historical context contains missing us_aqi values."
         )
 
     # --------------------------------------------------------
@@ -1073,7 +1090,8 @@ def get_historical_context(
     print("✓ No Feast/DuckDB historical join")
     print("✓ 70 model features")
     print("✓ target_aqi excluded")
-    print("✓ us_aqi excluded")
+    print("✓ us_aqi retained as recursive state")
+    print("✓ us_aqi excluded from model input")
     print("✓ Hourly continuity verified")
     print("✓ Historical context: PASS")
 
@@ -1401,10 +1419,25 @@ def generate_forecast(
         .reset_index(drop=True)
     )
 
-    if len(history) < 72:
+    if len(history) != 96:
         raise ValueError(
-            "Insufficient Feast historical "
-            "context for recursive forecast."
+            "Historical API/Feast alignment failed.\n"
+            f"Expected 96 hourly rows, received {len(history)}"
+        )
+
+    history_timestamps = (
+        history["timestamp"]
+        .sort_values()
+        .diff()
+        .dropna()
+    )
+
+    if not history_timestamps.eq(
+        pd.Timedelta(hours=1)
+    ).all():
+        raise ValueError(
+            "Historical prediction context contains "
+            "non-hourly gaps."
         )
 
     predictions = []
@@ -1540,12 +1573,8 @@ def generate_forecast(
 
         if anchor_rows.empty:
             raise ValueError(
-                "Missing feature anchor for prediction.\n"
-                f"Forecast timestamp: {prediction_timestamp}\n"
-                f"Required feature timestamp: {anchor_timestamp}\n"
-                f"Available range: "
-                f"{feature_frame['timestamp'].min()} -> "
-                f"{feature_frame['timestamp'].max()}"
+                "Missing feature anchor: "
+                f"{anchor_timestamp}"
             )
 
         row = (
@@ -1561,7 +1590,7 @@ def generate_forecast(
             .T
             .astype(float)
         )
-
+            
 
         # ----------------------------------------------
         # EXACT 70 FEATURE CHECK
@@ -2012,14 +2041,16 @@ def main():
     )
 
     latest_api_timestamp = (
-        api_df["timestamp"]
+        api_df.loc[
+            api_df["timestamp"] < forecast_start,
+            "timestamp"
+        ]
         .max()
         .floor("h")
     )
 
-
     print(
-        "Latest API timestamp:",
+        "Latest historical API timestamp:",
         latest_api_timestamp,
     )
 
