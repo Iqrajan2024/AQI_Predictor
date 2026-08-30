@@ -2,7 +2,7 @@
 PEARLS AQI PREDICTOR
 NEXT 3-DAY FORECAST PIPELINE
 
-Architecture:
+Architecture
 
 Open-Meteo
     |
@@ -12,6 +12,9 @@ Open-Meteo
     v
 Feast historical context
     |
+    +-- 70 model features
+    +-- us_aqi recursive state
+    |
     v
 70 model features
     |
@@ -19,10 +22,30 @@ Feast historical context
 MLflow @champion
     |
     v
-72 hourly recursive predictions
+Recursive prediction
+    |
+    +-- bridge to next local midnight
+    |
+    +-- 72 saved forecast hours
     |
     v
-3 daily averages
+3 daily AQI averages
+
+
+IMPORTANT CONTRACT
+
+Feast prediction context:
+    70 model features + us_aqi = 71 features
+
+MLflow model input:
+    exactly 70 model features
+
+Excluded from MLflow:
+    target_aqi
+    us_aqi
+
+us_aqi:
+    retained only as recursive AQI state
 """
 
 from pathlib import Path
@@ -51,6 +74,8 @@ FEATURE_REPO = (
     / "feature_repo"
     / "feature_repo"
 )
+
+PREDICTION_FEATURE_SERVICE = "aqi_prediction_context"
 
 PREDICTION_DIR = (
     PROJECT_ROOT
@@ -81,18 +106,32 @@ FEATURE_PREDICTION_FILE = (
 MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
 MLFLOW_MODEL_ALIAS = "champion"
 
-MLFLOW_DATABASE = (
-    PROJECT_ROOT / "mlflow.db"
+MLFLOW_TRACKING_URI = (
+    "http://127.0.0.1:5000"
 )
-
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
 
 MLFLOW_MODEL_URI = (
-    f"models:/{MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}"
+    f"models:/{MLFLOW_MODEL_NAME}"
+    f"@{MLFLOW_MODEL_ALIAS}"
 )
 
-mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
+mlflow.set_tracking_uri(
+    MLFLOW_TRACKING_URI
+)
+
+mlflow.set_registry_uri(
+    MLFLOW_TRACKING_URI
+)
+
+
+# ============================================================
+# FEAST
+# ============================================================
+
+PREDICTION_FEATURE_SERVICE = (
+    "aqi_prediction_context"
+)
+
 
 # ============================================================
 # LOCATION
@@ -100,12 +139,15 @@ mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
 
 LOCATION_ID = "peshawar"
 
+
 LATITUDE = 34.008
 LONGITUDE = 71.5785
 
+LOCAL_TIMEZONE = "Asia/Karachi"
+
 
 # ============================================================
-# API
+# OPEN-METEO
 # ============================================================
 
 WEATHER_URL = (
@@ -118,14 +160,16 @@ AIR_QUALITY_URL = (
 
 
 # ============================================================
-# FORECAST
+# FORECAST CONFIGURATION
 # ============================================================
 
 HISTORY_HOURS = 96
 
 FORECAST_DAYS = 3
 
-FORECAST_HOURS = 72
+FORECAST_HOURS = (
+    FORECAST_DAYS * 24
+)
 
 
 # ============================================================
@@ -134,12 +178,20 @@ FORECAST_HOURS = 72
 
 FEATURE_COLUMNS = [
 
+    # --------------------------------------------------------
+    # Current weather
+    # --------------------------------------------------------
+
     "temperature_2m",
     "relative_humidity_2m",
     "pressure_msl",
     "precipitation",
     "wind_speed_10m",
     "wind_direction_10m",
+
+    # --------------------------------------------------------
+    # Current pollutants
+    # --------------------------------------------------------
 
     "pm2_5",
     "pm10",
@@ -148,11 +200,19 @@ FEATURE_COLUMNS = [
     "sulphur_dioxide",
     "ozone",
 
+    # --------------------------------------------------------
+    # Time
+    # --------------------------------------------------------
+
     "hour",
     "day_of_week",
     "day_of_month",
     "month",
     "is_weekend",
+
+    # --------------------------------------------------------
+    # AQI lags
+    # --------------------------------------------------------
 
     "aqi_lag_1",
     "aqi_lag_3",
@@ -162,145 +222,182 @@ FEATURE_COLUMNS = [
     "aqi_lag_48",
     "aqi_lag_72",
 
+    # --------------------------------------------------------
+    # PM2.5 lags
+    # --------------------------------------------------------
+
     "pm2_5_lag_1",
     "pm2_5_lag_3",
     "pm2_5_lag_6",
     "pm2_5_lag_24",
+
+    # --------------------------------------------------------
+    # PM10 lags
+    # --------------------------------------------------------
 
     "pm10_lag_1",
     "pm10_lag_3",
     "pm10_lag_6",
     "pm10_lag_24",
 
+    # --------------------------------------------------------
+    # CO lags
+    # --------------------------------------------------------
+
     "carbon_monoxide_lag_1",
     "carbon_monoxide_lag_3",
     "carbon_monoxide_lag_6",
     "carbon_monoxide_lag_24",
+
+    # --------------------------------------------------------
+    # NO2 lags
+    # --------------------------------------------------------
 
     "nitrogen_dioxide_lag_1",
     "nitrogen_dioxide_lag_3",
     "nitrogen_dioxide_lag_6",
     "nitrogen_dioxide_lag_24",
 
+    # --------------------------------------------------------
+    # SO2 lags
+    # --------------------------------------------------------
+
     "sulphur_dioxide_lag_1",
     "sulphur_dioxide_lag_3",
     "sulphur_dioxide_lag_6",
     "sulphur_dioxide_lag_24",
+
+    # --------------------------------------------------------
+    # Ozone lags
+    # --------------------------------------------------------
 
     "ozone_lag_1",
     "ozone_lag_3",
     "ozone_lag_6",
     "ozone_lag_24",
 
+    # --------------------------------------------------------
+    # AQI rolling means
+    # --------------------------------------------------------
+
     "aqi_3h_mean",
     "aqi_6h_mean",
     "aqi_12h_mean",
     "aqi_24h_mean",
 
+    # --------------------------------------------------------
+    # PM2.5 rolling means
+    # --------------------------------------------------------
+
     "pm2_5_3h_mean",
     "pm2_5_6h_mean",
     "pm2_5_24h_mean",
 
+    # --------------------------------------------------------
+    # PM10 rolling means
+    # --------------------------------------------------------
+
     "pm10_3h_mean",
     "pm10_6h_mean",
     "pm10_24h_mean",
+
+    # --------------------------------------------------------
+    # Other pollutant rolling means
+    # --------------------------------------------------------
 
     "carbon_monoxide_24h_mean",
     "nitrogen_dioxide_24h_mean",
     "sulphur_dioxide_24h_mean",
     "ozone_24h_mean",
 
+    # --------------------------------------------------------
+    # AQI changes
+    # --------------------------------------------------------
+
     "aqi_change_1h",
     "aqi_change_3h",
     "aqi_change_6h",
     "aqi_change_24h",
 
+    # --------------------------------------------------------
+    # PM2.5 changes
+    # --------------------------------------------------------
+
     "pm2_5_change_1h",
     "pm2_5_change_24h",
+
+    # --------------------------------------------------------
+    # PM10 changes
+    # --------------------------------------------------------
 
     "pm10_change_1h",
     "pm10_change_24h",
 ]
 
 
+# ============================================================
+# CONTRACT ASSERTIONS
+# ============================================================
+
 assert len(FEATURE_COLUMNS) == 70
-assert "target_aqi" not in FEATURE_COLUMNS
-assert "us_aqi" not in FEATURE_COLUMNS
 
 assert len(set(FEATURE_COLUMNS)) == 70
 
-def validate_prediction_feature_contract(store):
-    print()
-    print("=" * 70)
-    print("PREDICTION FEATURE CONTRACT")
-    print("=" * 70)
+assert "target_aqi" not in FEATURE_COLUMNS
 
-    service = store.get_feature_service(
-        "aqi_model_features"
+assert "us_aqi" not in FEATURE_COLUMNS
+
+
+# Feast prediction context contains:
+#   70 model features
+#   + us_aqi recursive state
+FEAST_CONTEXT_FEATURES = (
+    FEATURE_COLUMNS
+    + ["us_aqi"]
+)
+
+assert len(FEAST_CONTEXT_FEATURES) == 71
+
+
+# ============================================================
+# GENERIC TIMESTAMP HELPERS
+# ============================================================
+
+def utc_now_hour():
+    """
+    Return current UTC time rounded down to the hour.
+    """
+
+    return (
+        pd.Timestamp.now(
+            tz="UTC"
+        ).floor("h")
     )
 
-    feast_features = [
-        feature.name
-        for projection in service.feature_view_projections
-        for feature in projection.features
-    ]
 
-    expected = set(FEATURE_COLUMNS)
-    actual = set(feast_features)
+def next_local_midnight_utc():
+    """
+    Calculate the next midnight in Asia/Karachi
+    and return it as a UTC timestamp.
+    """
 
-    print("Expected:", len(expected))
-    print("Feast:", len(actual))
-
-    if len(feast_features) != 70:
-        raise ValueError(
-            f"Feast exposes {len(feast_features)} features; "
-            "expected 70."
+    now_local = (
+        pd.Timestamp.now(
+            tz=LOCAL_TIMEZONE
         )
-
-    duplicates = sorted(
-        {
-            x
-            for x in feast_features
-            if feast_features.count(x) > 1
-        }
     )
 
-    if duplicates:
-        raise ValueError(
-            f"Duplicate Feast features: {duplicates}"
-        )
+    next_midnight_local = (
+        now_local
+        .normalize()
+        + pd.Timedelta(days=1)
+    )
 
-    missing = sorted(expected - actual)
-    extra = sorted(actual - expected)
+    return (
+        next_midnight_local
+        .tz_convert("UTC")
+    )
 
-    if missing:
-        raise ValueError(
-            "Missing Feast prediction features:\n"
-            + "\n".join(missing)
-        )
-
-    if extra:
-        raise ValueError(
-            "Unexpected Feast prediction features:\n"
-            + "\n".join(extra)
-        )
-
-    if "target_aqi" in actual:
-        raise ValueError(
-            "target_aqi MUST NOT be in prediction features."
-        )
-
-    if "us_aqi" in actual:
-        raise ValueError(
-            "us_aqi MUST NOT be in prediction features."
-        )
-
-    print("✓ 70 features")
-    print("✓ No duplicates")
-    print("✓ Exact feature match")
-    print("✓ target_aqi excluded")
-    print("✓ us_aqi excluded")
-    print("✓ PREDICTION FEATURE CONTRACT: PASS")
 
 # ============================================================
 # HEADER
@@ -308,6 +405,7 @@ def validate_prediction_feature_contract(store):
 
 def print_header():
 
+    print()
     print("=" * 70)
     print("PEARLS AQI PREDICTOR")
     print("NEXT 3-DAY AQI FORECAST")
@@ -324,13 +422,28 @@ def print_header():
     )
 
     print(
-        "MLflow:",
+        "MLflow model:",
+        MLFLOW_MODEL_NAME,
+    )
+
+    print(
+        "MLflow alias:",
+        MLFLOW_MODEL_ALIAS,
+    )
+
+    print(
+        "MLflow URI:",
         MLFLOW_MODEL_URI,
     )
 
     print(
-        "Feast:",
+        "Feast repository:",
         FEATURE_REPO,
+    )
+
+    print(
+        "Feast service:",
+        PREDICTION_FEATURE_SERVICE,
     )
 
     print(
@@ -338,14 +451,25 @@ def print_header():
         len(FEATURE_COLUMNS),
     )
 
+    print(
+        "Feast context features:",
+        len(FEAST_CONTEXT_FEATURES),
+    )
+
+    print(
+        "Timezone:",
+        LOCAL_TIMEZONE,
+    )
+
 
 # ============================================================
-# LOAD MLFLOW CHAMPION
+# VALIDATE MLFLOW MODEL
 # ============================================================
 
 def load_model():
 
-    print("\n" + "=" * 70)
+    print()
+    print("=" * 70)
     print("LOADING MLFLOW CHAMPION")
     print("=" * 70)
 
@@ -359,22 +483,22 @@ def load_model():
 
     print(
         "Tracking URI:",
-        mlflow.get_tracking_uri()
+        mlflow.get_tracking_uri(),
     )
 
     print(
         "Registry URI:",
-        mlflow.get_registry_uri()
+        mlflow.get_registry_uri(),
     )
 
     print(
         "Model:",
-        MLFLOW_MODEL_NAME
+        MLFLOW_MODEL_NAME,
     )
 
     print(
         "Alias:",
-        MLFLOW_MODEL_ALIAS
+        MLFLOW_MODEL_ALIAS,
     )
 
     from mlflow import MlflowClient
@@ -383,26 +507,9 @@ def load_model():
 
     try:
 
-        registered_model = (
-            client.get_registered_model(
-                MLFLOW_MODEL_NAME
-            )
-        )
-
-    except Exception as exc:
-
-        raise RuntimeError(
-            "\nMLflow registered model was not found.\n"
-            f"Expected model: {MLFLOW_MODEL_NAME}\n"
-            f"Expected database: {MLFLOW_DATABASE}\n\n"
-            "Run the training pipeline first so the model "
-            "is registered and assigned the champion alias."
-        ) from exc
-
-    try:
-
         champion = (
-            client.get_model_version_by_alias(
+            client
+            .get_model_version_by_alias(
                 MLFLOW_MODEL_NAME,
                 MLFLOW_MODEL_ALIAS,
             )
@@ -414,15 +521,20 @@ def load_model():
             "\nMLflow champion alias was not found.\n"
             f"Model: {MLFLOW_MODEL_NAME}\n"
             f"Alias: {MLFLOW_MODEL_ALIAS}\n"
+            f"Tracking URI: {MLFLOW_TRACKING_URI}\n\n"
+            "Start MLflow and make sure the model "
+            "has the champion alias."
         ) from exc
 
     print(
         "Champion version:",
-        champion.version
+        champion.version,
     )
 
-    model = mlflow.pyfunc.load_model(
-        MLFLOW_MODEL_URI
+    model = (
+        mlflow.pyfunc.load_model(
+            MLFLOW_MODEL_URI
+        )
     )
 
     print(
@@ -431,28 +543,168 @@ def load_model():
 
     print(
         "Model URI:",
-        MLFLOW_MODEL_URI
+        MLFLOW_MODEL_URI,
     )
 
     print(
         "Model type:",
-        type(model)
+        type(model),
     )
 
     return model
+
+
+# ============================================================
+# FEAST FEATURE CONTRACT
+# ============================================================
+ 
+def validate_prediction_feature_contract(store):
+    print()
+    print("=" * 70)
+    print("FEAST PREDICTION FEATURE CONTRACT")
+    print("=" * 70)
+
+    try:
+        service = store.get_feature_service(
+            "aqi_prediction_context"
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "\nFeast feature service was not found.\n"
+            "Expected service: aqi_prediction_context\n\n"
+            "Run:\n"
+            "  cd feature_repo\\feature_repo\n"
+            "  feast apply\n"
+        ) from exc
+
+    feast_features = [
+        feature.name
+        for projection in service.feature_view_projections
+        for feature in projection.features
+    ]
+
+    expected_model_features = list(FEATURE_COLUMNS)
+    expected_context_features = (
+        ["us_aqi"] + expected_model_features
+    )
+
+    expected = set(expected_context_features)
+    actual = set(feast_features)
+
+    print(
+        "Expected context features:",
+        len(expected),
+    )
+
+    print(
+        "Feast context features:",
+        len(actual),
+    )
+
+    # --------------------------------------------------------
+    # DUPLICATES
+    # --------------------------------------------------------
+
+    duplicates = sorted(
+        {
+            feature
+            for feature in feast_features
+            if feast_features.count(feature) > 1
+        }
+    )
+
+    if duplicates:
+        raise ValueError(
+            "Duplicate Feast prediction-context features:\n"
+            + "\n".join(duplicates)
+        )
+
+    # --------------------------------------------------------
+    # MISSING
+    # --------------------------------------------------------
+
+    missing = sorted(
+        expected - actual
+    )
+
+    if missing:
+        raise ValueError(
+            "Missing Feast prediction-context features:\n"
+            + "\n".join(missing)
+        )
+
+    # --------------------------------------------------------
+    # EXTRA
+    # --------------------------------------------------------
+
+    extra = sorted(
+        actual - expected
+    )
+
+    if extra:
+        raise ValueError(
+            "Unexpected Feast prediction-context features:\n"
+            + "\n".join(extra)
+        )
+
+    # --------------------------------------------------------
+    # TARGET EXCLUSION
+    # --------------------------------------------------------
+
+    if "target_aqi" in actual:
+        raise ValueError(
+            "target_aqi MUST NOT be in prediction context."
+        )
+
+    # --------------------------------------------------------
+    # us_aqi STATE
+    # --------------------------------------------------------
+
+    if "us_aqi" not in actual:
+        raise ValueError(
+            "us_aqi MUST be available in prediction context "
+            "as recursive AQI state."
+        )
+
+    # --------------------------------------------------------
+    # MODEL FEATURES
+    # --------------------------------------------------------
+
+    model_actual = [
+        feature
+        for feature in feast_features
+        if feature != "us_aqi"
+    ]
+
+    if model_actual != FEATURE_COLUMNS:
+        raise ValueError(
+            "Feast model feature ordering does not match "
+            "FEATURE_COLUMNS."
+        )
+
+    print("✓ 70 model features")
+    print("✓ us_aqi available as recursive state")
+    print("✓ 71 total prediction-context features")
+    print("✓ No duplicates")
+    print("✓ Exact feature match")
+    print("✓ target_aqi excluded")
+    print("✓ PREDICTION FEATURE CONTRACT: PASS")
+
 # ============================================================
 # LOAD FEAST
 # ============================================================
 
 def load_feast():
 
-    print("\n" + "=" * 70)
+    print()
+    print("=" * 70)
     print("LOADING FEAST")
     print("=" * 70)
 
     if not FEATURE_REPO.exists():
+
         raise FileNotFoundError(
-            f"Feast repository not found: "
+            "Feast repository not found:\n"
             f"{FEATURE_REPO}"
         )
 
@@ -460,46 +712,107 @@ def load_feast():
         repo_path=str(FEATURE_REPO)
     )
 
-    validate_prediction_feature_contract(store)
+    print(
+        "Feast project:",
+        store.project,
+    )
+
+    print(
+        "Feast repository:",
+        FEATURE_REPO,
+    )
+
+    validate_prediction_feature_contract(
+        store
+    )
+
+    print(
+        "✓ Feast FeatureStore loaded"
+    )
 
     return store
+
+
+# ============================================================
+# OPEN-METEO REQUEST HELPER
+# ============================================================
+
+def request_open_meteo(
+    url,
+    params,
+    name,
+):
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=30,
+        )
+
+        response.raise_for_status()
+
+    except requests.RequestException as exc:
+
+        raise RuntimeError(
+            f"{name} request failed.\n"
+            f"URL: {url}\n"
+            f"Error: {exc}"
+        ) from exc
+
+    try:
+
+        data = response.json()
+
+    except ValueError as exc:
+
+        raise RuntimeError(
+            f"{name} returned invalid JSON."
+        ) from exc
+
+    if "hourly" not in data:
+
+        raise RuntimeError(
+            f"{name} response does not contain "
+            "'hourly' data."
+        )
+
+    return data
 
 
 # ============================================================
 # FETCH WEATHER
 # ============================================================
 
-def fetch_weather():
+def fetch_weather(
+    forecast_end_utc
+):
 
-    now_utc = (
-        pd.Timestamp.now(tz="UTC")
-    )
+    print()
+    print("=" * 70)
+    print("FETCHING OPEN-METEO WEATHER")
+    print("=" * 70)
 
     current_hour = (
-        now_utc.floor("h")
+        utc_now_hour()
     )
 
-    next_day = (
-        current_hour.normalize()
-        + pd.Timedelta(days=1)
+    required_forecast_hours = (
+        int(
+            (
+                forecast_end_utc
+                - current_hour
+            ).total_seconds()
+            / 3600
+        )
+        + 1
     )
-
-    forecast_end = (
-        next_day
-        + pd.Timedelta(hours=71)
-    )
-
-    required_hours = int(
-        (
-            forecast_end
-            - current_hour
-        ).total_seconds()
-        / 3600
-    ) + 1
 
     params = {
 
         "latitude": LATITUDE,
+
         "longitude": LONGITUDE,
 
         "hourly": (
@@ -513,7 +826,8 @@ def fetch_weather():
 
         "past_hours": HISTORY_HOURS,
 
-        "forecast_hours": required_hours,
+        "forecast_hours":
+            required_forecast_hours,
 
         "timezone": "UTC",
 
@@ -524,30 +838,35 @@ def fetch_weather():
         "precipitation_unit": "mm",
     }
 
-    response = requests.get(
+    data = request_open_meteo(
         WEATHER_URL,
-        params=params,
-        timeout=30,
+        params,
+        "Open-Meteo weather",
     )
-
-    response.raise_for_status()
-
-    data = response.json()
 
     df = pd.DataFrame(
         data["hourly"]
     )
 
-    df["timestamp"] = pd.to_datetime(
-        df["time"],
-        utc=True,
+    if "time" not in df.columns:
+
+        raise ValueError(
+            "Weather response has no time column."
+        )
+
+    df["timestamp"] = (
+        pd.to_datetime(
+            df["time"],
+            utc=True,
+        )
+        .dt.floor("h")
     )
 
     df = df.drop(
         columns=["time"]
     )
 
-    return (
+    df = (
         df
         .sort_values("timestamp")
         .drop_duplicates(
@@ -556,42 +875,79 @@ def fetch_weather():
         .reset_index(drop=True)
     )
 
+    required_columns = [
+        "timestamp",
+        "temperature_2m",
+        "relative_humidity_2m",
+        "pressure_msl",
+        "precipitation",
+        "wind_speed_10m",
+        "wind_direction_10m",
+    ]
+
+    missing = sorted(
+        set(required_columns)
+        - set(df.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Weather data is missing:\n"
+            + "\n".join(missing)
+        )
+
+    print(
+        "Weather rows:",
+        len(df),
+    )
+
+    print(
+        "Weather range:",
+        df["timestamp"].min(),
+        "->",
+        df["timestamp"].max(),
+    )
+
+    print(
+        "✓ Weather forecast loaded"
+    )
+
+    return df
+
 
 # ============================================================
 # FETCH AIR QUALITY
 # ============================================================
 
-def fetch_air_quality():
+def fetch_air_quality(
+    forecast_end_utc
+):
 
-    now_utc = (
-        pd.Timestamp.now(tz="UTC")
-    )
+    print()
+    print("=" * 70)
+    print("FETCHING OPEN-METEO AIR QUALITY")
+    print("=" * 70)
 
     current_hour = (
-        now_utc.floor("h")
+        utc_now_hour()
     )
 
-    next_day = (
-        current_hour.normalize()
-        + pd.Timedelta(days=1)
+    required_forecast_hours = (
+        int(
+            (
+                forecast_end_utc
+                - current_hour
+            ).total_seconds()
+            / 3600
+        )
+        + 1
     )
-
-    forecast_end = (
-        next_day
-        + pd.Timedelta(hours=71)
-    )
-
-    required_hours = int(
-        (
-            forecast_end
-            - current_hour
-        ).total_seconds()
-        / 3600
-    ) + 1
 
     params = {
 
         "latitude": LATITUDE,
+
         "longitude": LONGITUDE,
 
         "hourly": (
@@ -606,35 +962,41 @@ def fetch_air_quality():
 
         "past_hours": HISTORY_HOURS,
 
-        "forecast_hours": required_hours,
+        "forecast_hours":
+            required_forecast_hours,
 
         "timezone": "UTC",
     }
 
-    response = requests.get(
+    data = request_open_meteo(
         AIR_QUALITY_URL,
-        params=params,
-        timeout=30,
+        params,
+        "Open-Meteo air quality",
     )
-
-    response.raise_for_status()
-
-    data = response.json()
 
     df = pd.DataFrame(
         data["hourly"]
     )
 
-    df["timestamp"] = pd.to_datetime(
-        df["time"],
-        utc=True,
+    if "time" not in df.columns:
+
+        raise ValueError(
+            "Air-quality response has no time column."
+        )
+
+    df["timestamp"] = (
+        pd.to_datetime(
+            df["time"],
+            utc=True,
+        )
+        .dt.floor("h")
     )
 
     df = df.drop(
         columns=["time"]
     )
 
-    return (
+    df = (
         df
         .sort_values("timestamp")
         .drop_duplicates(
@@ -643,15 +1005,61 @@ def fetch_air_quality():
         .reset_index(drop=True)
     )
 
+    required_columns = [
+        "timestamp",
+        "pm2_5",
+        "pm10",
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "sulphur_dioxide",
+        "ozone",
+        "us_aqi",
+    ]
+
+    missing = sorted(
+        set(required_columns)
+        - set(df.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Air-quality data is missing:\n"
+            + "\n".join(missing)
+        )
+
+    print(
+        "Air-quality rows:",
+        len(df),
+    )
+
+    print(
+        "Air-quality range:",
+        df["timestamp"].min(),
+        "->",
+        df["timestamp"].max(),
+    )
+
+    print(
+        "✓ Air-quality forecast loaded"
+    )
+
+    return df
+
 
 # ============================================================
-# MERGE API
+# MERGE OPEN-METEO
 # ============================================================
 
 def merge_api_data(
     weather,
     air,
 ):
+
+    print()
+    print("=" * 70)
+    print("MERGING OPEN-METEO DATA")
+    print("=" * 70)
 
     df = pd.merge(
         weather,
@@ -670,9 +1078,55 @@ def merge_api_data(
     )
 
     if df.empty:
+
         raise ValueError(
             "Open-Meteo merged dataset is empty."
         )
+
+    required_columns = [
+        "timestamp",
+        "temperature_2m",
+        "relative_humidity_2m",
+        "pressure_msl",
+        "precipitation",
+        "wind_speed_10m",
+        "wind_direction_10m",
+        "pm2_5",
+        "pm10",
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "sulphur_dioxide",
+        "ozone",
+        "us_aqi",
+    ]
+
+    missing = sorted(
+        set(required_columns)
+        - set(df.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Merged Open-Meteo data is missing:\n"
+            + "\n".join(missing)
+        )
+
+    print(
+        "Merged rows:",
+        len(df),
+    )
+
+    print(
+        "Merged range:",
+        df["timestamp"].min(),
+        "->",
+        df["timestamp"].max(),
+    )
+
+    print(
+        "✓ Open-Meteo merge complete"
+    )
 
     return df
 
@@ -681,244 +1135,108 @@ def merge_api_data(
 # FEAST HISTORICAL CONTEXT
 # ============================================================
 
-
 def get_historical_context(
-    project_root,
+    store,
     latest_timestamp,
 ):
-    """
-    Load the recent historical feature context required for
-    recursive prediction.
 
-    Feast is still used to validate the 70-feature contract.
-    The historical feature values are read directly from the
-    feature-engineered Parquet source to avoid the expensive
-    Feast/DuckDB point-in-time join during prediction.
-    """
-
+    print()
     print("=" * 70)
-    print("LOADING HISTORICAL FEATURE CONTEXT")
+    print("LOADING HISTORICAL CONTEXT FROM FEAST")
     print("=" * 70)
 
-    latest_timestamp = pd.to_datetime(
-        latest_timestamp,
-        utc=True,
-    ).floor("h")
-
-    # --------------------------------------------------------
-    # FEAST CONTRACT VALIDATION
-    # --------------------------------------------------------
-
-    store = FeatureStore(
-        repo_path=str(FEATURE_REPO)
-    )
-
-    service = store.get_feature_service(
-        "aqi_model_features"
-    )
-
-    feast_features = [
-        feature.name
-        for projection in service.feature_view_projections
-        for feature in projection.features
-    ]
-
-    print("=" * 70)
-    print("PREDICTION FEATURE CONTRACT")
-    print("=" * 70)
-
-    print(
-        "Expected:",
-        len(FEATURE_COLUMNS),
-    )
-
-    print(
-        "Feast:",
-        len(feast_features),
-    )
-
-    if len(feast_features) != 70:
-        raise ValueError(
-            f"Feast exposes {len(feast_features)} "
-            "features instead of 70."
+    latest_timestamp = (
+        pd.to_datetime(
+            latest_timestamp,
+            utc=True,
         )
-
-    if len(set(feast_features)) != 70:
-        raise ValueError(
-            "Duplicate Feast features detected."
-        )
-
-    if set(feast_features) != set(FEATURE_COLUMNS):
-
-        missing = sorted(
-            set(FEATURE_COLUMNS)
-            - set(feast_features)
-        )
-
-        extra = sorted(
-            set(feast_features)
-            - set(FEATURE_COLUMNS)
-        )
-
-        raise ValueError(
-            "Prediction feature contract mismatch.\n"
-            f"Missing: {missing}\n"
-            f"Extra: {extra}"
-        )
-
-    if "target_aqi" in feast_features:
-        raise ValueError(
-            "target_aqi must not be a model feature."
-        )
-
-    if "us_aqi" in feast_features:
-        raise ValueError(
-            "us_aqi must not be a model feature."
-        )
-
-    print("✓ 70 features")
-    print("✓ No duplicates")
-    print("✓ Exact feature match")
-    print("✓ target_aqi excluded")
-    print("✓ us_aqi excluded")
-    print("✓ PREDICTION FEATURE CONTRACT: PASS")
-
-    # --------------------------------------------------------
-    # SOURCE FILE
-    # --------------------------------------------------------
-
-    source_path = (
-        project_root
-        / "data"
-        / "processed"
-        / "aqi_features.parquet"
+        .floor("h")
     )
 
-    if not source_path.exists():
-        raise FileNotFoundError(
-            f"Feature source not found:\n{source_path}"
-        )
-
-    print(
-        "Feature source:",
-        source_path,
-    )
-
-    # --------------------------------------------------------
-    # CHECK SOURCE RANGE FIRST
-    # --------------------------------------------------------
-
-    timestamp_df = pd.read_parquet(
-        source_path,
-        columns=["timestamp"],
-    )
-
-    timestamp_df["timestamp"] = pd.to_datetime(
-        timestamp_df["timestamp"],
-        utc=True,
-    )
-
-    source_min = timestamp_df["timestamp"].min()
-    source_max = timestamp_df["timestamp"].max()
-
-    del timestamp_df
-
-    print(
-        "Source minimum:",
-        source_min,
-    )
-
-    print(
-        "Source maximum:",
-        source_max,
-    )
-
-    # --------------------------------------------------------
-    # CRITICAL VALIDATION
-    # --------------------------------------------------------
-
-    if latest_timestamp > source_max:
-        raise ValueError(
-            "Current API timestamp is newer than the "
-            "historical feature source.\n"
-            f"API timestamp: {latest_timestamp}\n"
-            f"Source maximum: {source_max}\n\n"
-            "The historical feature source must be updated "
-            "before recursive prediction can continue."
-        )
-
-    # --------------------------------------------------------
-    # REQUIRED HISTORY
-    # --------------------------------------------------------
-
-    # Largest model lag = 72 hours.
-    # Rolling 24h features also require sufficient context.
-    #
-    # Use 8 days to provide a safe historical window.
     history_start = (
         latest_timestamp
-        - pd.Timedelta(days=8)
+        - pd.Timedelta(
+            hours=HISTORY_HOURS - 1
+        )
+    )
+
+    timestamps = pd.date_range(
+        start=history_start,
+        end=latest_timestamp,
+        freq="h",
+        tz="UTC",
+    )
+
+    if len(timestamps) != HISTORY_HOURS:
+
+        raise ValueError(
+            "Incorrect Feast timestamp count.\n"
+            f"Expected: {HISTORY_HOURS}\n"
+            f"Received: {len(timestamps)}"
+        )
+
+    entity_df = pd.DataFrame(
+        {
+            "location_id": LOCATION_ID,
+            "event_timestamp": timestamps,
+        }
     )
 
     print(
-        "Required historical context:",
+        "Feast entity range:",
         history_start,
         "->",
         latest_timestamp,
     )
 
-    # --------------------------------------------------------
-    # READ ONLY REQUIRED COLUMNS
-    # --------------------------------------------------------
-
-    columns = [
-        "location_id",
-        "timestamp",
-        *FEATURE_COLUMNS,
-
-        # Required for recursive AQI state.
-        # NOT a model feature.
-        "us_aqi",
-    ]
-
-    feast_history = pd.read_parquet(
-        source_path,
-        columns=columns,
-        filters=[
-            [
-                (
-                    "timestamp",
-                    ">=",
-                    history_start.to_pydatetime(),
-                ),
-                (
-                    "timestamp",
-                    "<=",
-                    latest_timestamp.to_pydatetime(),
-                ),
-            ]
-        ],
+    print(
+        "Requested rows:",
+        len(entity_df),
     )
+
+    service = (
+        store.get_feature_service(
+            PREDICTION_FEATURE_SERVICE
+        )
+    )
+
+    historical = (
+        store
+        .get_historical_features(
+            entity_df=entity_df,
+            features=service,
+        )
+        .to_df()
+    )
+
+    if historical.empty:
+
+        raise ValueError(
+            "Feast historical retrieval returned "
+            "an empty dataframe."
+        )
 
     # --------------------------------------------------------
     # TIMESTAMP
     # --------------------------------------------------------
 
-    feast_history["event_timestamp"] = pd.to_datetime(
-        feast_history["timestamp"],
-        utc=True,
+    if "event_timestamp" not in historical.columns:
+
+        raise ValueError(
+            "Feast result does not contain "
+            "event_timestamp."
+        )
+
+    historical["event_timestamp"] = (
+        pd.to_datetime(
+            historical["event_timestamp"],
+            utc=True,
+        )
+        .dt.floor("h")
     )
 
-    feast_history = feast_history.drop(
-        columns=["timestamp"]
-    )
-
-    # --------------------------------------------------------
-    # SORT / DEDUPLICATE
-    # --------------------------------------------------------
-
-    feast_history = (
-        feast_history
+    historical = (
+        historical
         .sort_values(
             "event_timestamp"
         )
@@ -933,11 +1251,80 @@ def get_historical_context(
     )
 
     # --------------------------------------------------------
-    # NUMERIC FEATURES
+    # ROW COUNT
     # --------------------------------------------------------
 
-    feast_history[FEATURE_COLUMNS] = (
-        feast_history[FEATURE_COLUMNS]
+    if len(historical) != HISTORY_HOURS:
+
+        raise ValueError(
+            "Feast historical retrieval returned "
+            f"{len(historical)} rows; "
+            f"expected {HISTORY_HOURS}."
+        )
+
+    # --------------------------------------------------------
+    # TARGET MUST NOT EXIST
+    # --------------------------------------------------------
+
+    if "target_aqi" in historical.columns:
+
+        raise ValueError(
+            "target_aqi leaked into prediction context."
+        )
+
+    # --------------------------------------------------------
+    # US AQI MUST EXIST
+    # --------------------------------------------------------
+
+    if "us_aqi" not in historical.columns:
+
+        raise ValueError(
+            "Feast prediction context does not "
+            "contain us_aqi."
+        )
+
+    # --------------------------------------------------------
+    # REQUIRED COLUMNS
+    # --------------------------------------------------------
+
+    expected_columns = [
+        "location_id",
+        "event_timestamp",
+        *FEATURE_COLUMNS,
+        "us_aqi",
+    ]
+
+    missing = sorted(
+        set(expected_columns)
+        - set(historical.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Feast historical context is missing:\n"
+            + "\n".join(missing)
+        )
+
+    # --------------------------------------------------------
+    # KEEP ONLY CONTEXT
+    # --------------------------------------------------------
+
+    historical = historical[
+        expected_columns
+    ].copy()
+
+    # --------------------------------------------------------
+    # NUMERIC
+    # --------------------------------------------------------
+
+    numeric_columns = (
+        FEATURE_COLUMNS
+        + ["us_aqi"]
+    )
+
+    historical[numeric_columns] = (
+        historical[numeric_columns]
         .apply(
             pd.to_numeric,
             errors="coerce",
@@ -945,166 +1332,139 @@ def get_historical_context(
     )
 
     # --------------------------------------------------------
-    # MISSING FEATURE CHECK
+    # NULLS
     # --------------------------------------------------------
 
-    missing_features = sorted(
-        set(FEATURE_COLUMNS)
-        - set(feast_history.columns)
+    null_columns = (
+        historical[
+            numeric_columns
+        ]
+        .columns[
+            historical[
+                numeric_columns
+            ]
+            .isna()
+            .any()
+        ]
+        .tolist()
     )
 
-    if missing_features:
+    if null_columns:
+
         raise ValueError(
-            "Historical source is missing model features:\n"
-            + "\n".join(missing_features)
+            "Feast historical context contains "
+            "missing values:\n"
+            + "\n".join(null_columns)
         )
 
     # --------------------------------------------------------
-    # DROP INVALID ROWS
-    # --------------------------------------------------------
-
-    before = len(feast_history)
-
-    feast_history = (
-        feast_history
-        .dropna(
-            subset=FEATURE_COLUMNS
-        )
-        .reset_index(drop=True)
-    )
-
-    removed = before - len(feast_history)
-
-    if removed:
-        print(
-            "Rows removed because of missing features:",
-            removed,
-        )
-
-    # --------------------------------------------------------
-    # HISTORY SIZE
-    # --------------------------------------------------------
-
-    if len(feast_history) < 72:
-        raise ValueError(
-            "Insufficient historical context.\n"
-            f"Required: at least 72 rows\n"
-            f"Received: {len(feast_history)}"
-        )
-
-    # --------------------------------------------------------
-    # HOURLY CONTINUITY
+    # CONTINUITY
     # --------------------------------------------------------
 
     deltas = (
-        feast_history["event_timestamp"]
+        historical[
+            "event_timestamp"
+        ]
         .diff()
         .dropna()
     )
 
-    expected_delta = pd.Timedelta(hours=1)
-
-    if not deltas.eq(expected_delta).all():
-
-        bad_rows = feast_history.loc[
-            deltas.index[
-                deltas != expected_delta
-            ]
-        ]
+    if not deltas.eq(
+        pd.Timedelta(hours=1)
+    ).all():
 
         raise ValueError(
-            "Historical feature source contains "
-            "non-hourly gaps.\n"
-            f"First problematic rows:\n{bad_rows.head()}"
+            "Feast historical context contains "
+            "non-hourly gaps."
         )
 
     # --------------------------------------------------------
-    # FINAL MODEL INPUT VALIDATION
+    # RANGE
     # --------------------------------------------------------
 
-    if "target_aqi" in feast_history.columns:
+    if (
+        historical[
+            "event_timestamp"
+        ].min()
+        != history_start
+    ):
+
         raise ValueError(
-            "target_aqi unexpectedly present in prediction "
-            "feature context."
+            "Feast historical range does not "
+            "start at expected timestamp.\n"
+            f"Expected: {history_start}\n"
+            f"Received: "
+            f"{historical['event_timestamp'].min()}"
         )
 
-    
+    if (
+        historical[
+            "event_timestamp"
+        ].max()
+        != latest_timestamp
+    ):
 
-    actual_feature_columns = [
-        c
-        for c in feast_history.columns
-        if c not in [
-            "location_id",
-            "event_timestamp",
-            "us_aqi",
-        ]
-    ]
-
-    if actual_feature_columns != FEATURE_COLUMNS:
         raise ValueError(
-            "Prediction feature ordering mismatch."
+            "Feast historical range does not "
+            "end at expected timestamp.\n"
+            f"Expected: {latest_timestamp}\n"
+            f"Received: "
+            f"{historical['event_timestamp'].max()}"
         )
-
-    if "us_aqi" not in feast_history.columns:
-        raise ValueError(
-            "Historical context is missing us_aqi. "
-            "us_aqi is required for recursive AQI prediction state."
-        )
-
-    feast_history["us_aqi"] = pd.to_numeric(
-        feast_history["us_aqi"],
-        errors="coerce",
-    )
-
-    if feast_history["us_aqi"].isna().any():
-        raise ValueError(
-            "Historical context contains missing us_aqi values."
-        )
-
-    # --------------------------------------------------------
-    # OUTPUT
-    # --------------------------------------------------------
 
     print(
-        "Historical context rows:",
-        len(feast_history),
+        "Historical rows:",
+        len(historical),
     )
 
     print(
-        "Historical context:",
-        feast_history[
+        "Historical range:",
+        historical[
             "event_timestamp"
         ].min(),
         "->",
-        feast_history[
+        historical[
             "event_timestamp"
         ].max(),
     )
 
-    print(
-        "Historical model features:",
-        len(FEATURE_COLUMNS),
-    )
-
-    print("✓ Direct Parquet feature retrieval")
-    print("✓ No Feast/DuckDB historical join")
+    print("✓ 96 historical Feast rows")
     print("✓ 70 model features")
-    print("✓ target_aqi excluded")
     print("✓ us_aqi retained as recursive state")
-    print("✓ us_aqi excluded from model input")
+    print("✓ target_aqi excluded")
+    print("✓ No Parquet dependency")
+    print("✓ No null values")
     print("✓ Hourly continuity verified")
-    print("✓ Historical context: PASS")
+    print("✓ FEAST HISTORICAL CONTEXT: PASS")
 
-    return feast_history          
-         
-    
+    return historical
+
+
 # ============================================================
-# CREATE FUTURE FEATURES
+# CREATE MODEL FEATURES
 # ============================================================
 
 def create_features(df):
 
     df = df.copy()
+
+    df["timestamp"] = (
+        pd.to_datetime(
+            df["timestamp"],
+            utc=True,
+        )
+        .dt.floor("h")
+    )
+
+    df = (
+        df
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # TIME FEATURES
+    # --------------------------------------------------------
 
     df["hour"] = (
         df["timestamp"].dt.hour
@@ -1126,6 +1486,10 @@ def create_features(df):
         df["day_of_week"] >= 5
     ).astype(int)
 
+    # --------------------------------------------------------
+    # AQI LAGS
+    # --------------------------------------------------------
+
     for lag in [
         1,
         3,
@@ -1142,6 +1506,10 @@ def create_features(df):
             df["us_aqi"]
             .shift(lag)
         )
+
+    # --------------------------------------------------------
+    # POLLUTANT LAGS
+    # --------------------------------------------------------
 
     pollutants = [
         "pm2_5",
@@ -1168,6 +1536,10 @@ def create_features(df):
                 .shift(lag)
             )
 
+    # --------------------------------------------------------
+    # AQI ROLLING MEANS
+    # --------------------------------------------------------
+
     for window in [
         3,
         6,
@@ -1180,9 +1552,16 @@ def create_features(df):
         ] = (
             df["us_aqi"]
             .shift(1)
-            .rolling(window)
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
             .mean()
         )
+
+    # --------------------------------------------------------
+    # PM2.5 ROLLING MEANS
+    # --------------------------------------------------------
 
     for window in [
         3,
@@ -1195,9 +1574,16 @@ def create_features(df):
         ] = (
             df["pm2_5"]
             .shift(1)
-            .rolling(window)
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
             .mean()
         )
+
+    # --------------------------------------------------------
+    # PM10 ROLLING MEANS
+    # --------------------------------------------------------
 
     for window in [
         3,
@@ -1210,9 +1596,16 @@ def create_features(df):
         ] = (
             df["pm10"]
             .shift(1)
-            .rolling(window)
+            .rolling(
+                window=window,
+                min_periods=window,
+            )
             .mean()
         )
+
+    # --------------------------------------------------------
+    # OTHER POLLUTANT 24H MEANS
+    # --------------------------------------------------------
 
     for pollutant in [
         "carbon_monoxide",
@@ -1226,9 +1619,16 @@ def create_features(df):
         ] = (
             df[pollutant]
             .shift(1)
-            .rolling(24)
+            .rolling(
+                window=24,
+                min_periods=24,
+            )
             .mean()
         )
+
+    # --------------------------------------------------------
+    # AQI CHANGES
+    # --------------------------------------------------------
 
     df["aqi_change_1h"] = (
         df["us_aqi"]
@@ -1250,6 +1650,10 @@ def create_features(df):
         - df["aqi_lag_24"]
     )
 
+    # --------------------------------------------------------
+    # PM2.5 CHANGES
+    # --------------------------------------------------------
+
     df["pm2_5_change_1h"] = (
         df["pm2_5"]
         - df["pm2_5_lag_1"]
@@ -1259,6 +1663,10 @@ def create_features(df):
         df["pm2_5"]
         - df["pm2_5_lag_24"]
     )
+
+    # --------------------------------------------------------
+    # PM10 CHANGES
+    # --------------------------------------------------------
 
     df["pm10_change_1h"] = (
         df["pm10"]
@@ -1270,7 +1678,453 @@ def create_features(df):
         - df["pm10_lag_24"]
     )
 
+    # --------------------------------------------------------
+    # FINAL FEATURE CONTRACT
+    # --------------------------------------------------------
+
+    missing = sorted(
+        set(FEATURE_COLUMNS)
+        - set(df.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Feature engineering failed. "
+            "Missing features:\n"
+            + "\n".join(missing)
+        )
+
     return df
+
+
+# ============================================================
+# VALIDATE MODEL INPUT
+# ============================================================
+
+def validate_prediction_features(
+    X
+):
+
+    if not isinstance(
+        X,
+        pd.DataFrame,
+    ):
+
+        X = pd.DataFrame(X)
+
+    missing = sorted(
+        set(FEATURE_COLUMNS)
+        - set(X.columns)
+    )
+
+    if missing:
+
+        raise ValueError(
+            "Prediction input is missing "
+            "features:\n"
+            + "\n".join(missing)
+        )
+
+    extra = sorted(
+        set(X.columns)
+        - set(FEATURE_COLUMNS)
+    )
+
+    if extra:
+
+        raise ValueError(
+            "Prediction input contains "
+            "unexpected features:\n"
+            + "\n".join(extra)
+        )
+
+    X = X[
+        FEATURE_COLUMNS
+    ].copy()
+
+    if X.shape[1] != 70:
+
+        raise ValueError(
+            "Prediction requires exactly "
+            f"70 features; received "
+            f"{X.shape[1]}."
+        )
+
+    if "target_aqi" in X.columns:
+
+        raise ValueError(
+            "target_aqi leaked into "
+            "MLflow prediction input."
+        )
+
+    if "us_aqi" in X.columns:
+
+        raise ValueError(
+            "us_aqi leaked into "
+            "MLflow prediction input."
+        )
+
+    X = X.apply(
+        pd.to_numeric,
+        errors="coerce",
+    )
+
+    if X.isna().any().any():
+
+        missing_values = (
+            X.columns[
+                X.isna().any()
+            ]
+            .tolist()
+        )
+
+        raise ValueError(
+            "Prediction input contains "
+            "NaN values:\n"
+            + "\n".join(missing_values)
+        )
+
+    return X
+
+
+# ============================================================
+# SINGLE MODEL PREDICTION
+# ============================================================
+
+def predict_one(
+    model,
+    working_history,
+    prediction_timestamp,
+):
+
+    prediction_timestamp = (
+        pd.to_datetime(
+            prediction_timestamp,
+            utc=True,
+        )
+        .floor("h")
+    )
+
+    anchor_timestamp = (
+        prediction_timestamp
+        - pd.Timedelta(hours=1)
+    )
+
+    feature_frame = (
+        create_features(
+            working_history
+        )
+    )
+
+    anchor_rows = feature_frame[
+        feature_frame["timestamp"]
+        == anchor_timestamp
+    ]
+
+    if anchor_rows.empty:
+
+        raise ValueError(
+            "Missing feature anchor.\n"
+            f"Prediction timestamp: "
+            f"{prediction_timestamp}\n"
+            f"Required anchor: "
+            f"{anchor_timestamp}"
+        )
+
+    row = (
+        anchor_rows
+        .iloc[-1]
+    )
+
+    X = (
+        row[
+            FEATURE_COLUMNS
+        ]
+        .to_frame()
+        .T
+    )
+
+    X = validate_prediction_features(
+        X
+    )
+
+    if X.shape != (1, 70):
+
+        raise ValueError(
+            "Invalid model input shape.\n"
+            f"Expected: (1, 70)\n"
+            f"Received: {X.shape}"
+        )
+
+    # ============================================================
+    # MLflow MODEL INPUT DTYPE NORMALIZATION
+    # ============================================================
+
+    # MLflow champion signature expects these temporal features
+    # as 32-bit integers, not pandas/numpy int64.
+    INT32_FEATURES = [
+        "hour",
+        "day_of_week",
+        "day_of_month",
+        "month",
+    ]
+
+    for col in INT32_FEATURES:
+        if col in X.columns:
+            X[col] = X[col].astype("int32")
+
+    if "is_weekend" in X.columns:
+        X["is_weekend"] = X["is_weekend"].astype("int64")
+
+    prediction = (
+        model.predict(X)
+    )
+
+    predicted_aqi = float(
+        np.asarray(
+            prediction
+        )
+        .reshape(-1)[0]
+    )
+
+    if not np.isfinite(
+        predicted_aqi
+    ):
+
+        raise ValueError(
+            "MLflow model returned "
+            "a non-finite AQI prediction."
+        )
+
+    predicted_aqi = max(
+        0.0,
+        predicted_aqi,
+    )
+
+    return (
+        predicted_aqi,
+        X,
+        anchor_timestamp,
+    )
+
+
+# ============================================================
+# BUILD RECURSIVE ROW
+# ============================================================
+
+def build_recursive_row(
+    future_row,
+    predicted_aqi,
+):
+
+    return {
+
+        "timestamp":
+            future_row[
+                "timestamp"
+            ],
+
+        "temperature_2m":
+            future_row[
+                "temperature_2m"
+            ],
+
+        "relative_humidity_2m":
+            future_row[
+                "relative_humidity_2m"
+            ],
+
+        "pressure_msl":
+            future_row[
+                "pressure_msl"
+            ],
+
+        "precipitation":
+            future_row[
+                "precipitation"
+            ],
+
+        "wind_speed_10m":
+            future_row[
+                "wind_speed_10m"
+            ],
+
+        "wind_direction_10m":
+            future_row[
+                "wind_direction_10m"
+            ],
+
+        "pm2_5":
+            future_row[
+                "pm2_5"
+            ],
+
+        "pm10":
+            future_row[
+                "pm10"
+            ],
+
+        "carbon_monoxide":
+            future_row[
+                "carbon_monoxide"
+            ],
+
+        "nitrogen_dioxide":
+            future_row[
+                "nitrogen_dioxide"
+            ],
+
+        "sulphur_dioxide":
+            future_row[
+                "sulphur_dioxide"
+            ],
+
+        "ozone":
+            future_row[
+                "ozone"
+            ],
+
+        # IMPORTANT:
+        # Future AQI comes from our model,
+        # not Open-Meteo us_aqi.
+        "us_aqi":
+            predicted_aqi,
+    }
+
+
+# ============================================================
+# VALIDATE API HISTORY
+# ============================================================
+
+def validate_api_history(
+    api_history,
+    expected_start,
+    expected_end,
+):
+
+    if len(api_history) != HISTORY_HOURS:
+
+        raise ValueError(
+            "API historical context must contain "
+            f"exactly {HISTORY_HOURS} rows.\n"
+            f"Received: {len(api_history)}"
+        )
+
+    timestamps = (
+        api_history[
+            "timestamp"
+        ]
+        .sort_values()
+        .reset_index(drop=True)
+    )
+
+    if timestamps.iloc[0] != expected_start:
+
+        raise ValueError(
+            "API history start mismatch.\n"
+            f"Expected: {expected_start}\n"
+            f"Received: {timestamps.iloc[0]}"
+        )
+
+    if timestamps.iloc[-1] != expected_end:
+
+        raise ValueError(
+            "API history end mismatch.\n"
+            f"Expected: {expected_end}\n"
+            f"Received: {timestamps.iloc[-1]}"
+        )
+
+    deltas = (
+        timestamps
+        .diff()
+        .dropna()
+    )
+
+    if not deltas.eq(
+        pd.Timedelta(hours=1)
+    ).all():
+
+        raise ValueError(
+            "API history contains "
+            "non-hourly gaps."
+        )
+
+    if api_history[
+        "us_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "API/Feast historical context "
+            "contains missing us_aqi."
+        )
+
+
+# ============================================================
+# VALIDATE FUTURE API DATA
+# ============================================================
+
+def validate_future_api(
+    api_df,
+    future_start,
+    future_end,
+):
+
+    future = (
+        api_df[
+            (
+                api_df["timestamp"]
+                >= future_start
+            )
+            &
+            (
+                api_df["timestamp"]
+                <= future_end
+            )
+        ]
+        .copy()
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    expected_hours = (
+        int(
+            (
+                future_end
+                - future_start
+            ).total_seconds()
+            / 3600
+        )
+        + 1
+    )
+
+    if len(future) != expected_hours:
+
+        raise ValueError(
+            "Open-Meteo future context is incomplete.\n"
+            f"Expected: {expected_hours} rows\n"
+            f"Received: {len(future)}\n"
+            f"Range: {future_start} -> {future_end}"
+        )
+
+    deltas = (
+        future[
+            "timestamp"
+        ]
+        .diff()
+        .dropna()
+    )
+
+    if not deltas.eq(
+        pd.Timedelta(hours=1)
+    ).all():
+
+        raise ValueError(
+            "Open-Meteo future context contains "
+            "non-hourly gaps."
+        )
+
+    return future
 
 
 # ============================================================
@@ -1281,103 +2135,122 @@ def generate_forecast(
     model,
     feast_history,
     api_df,
+    forecast_start,
+    forecast_end,
 ):
-    # ========================================================
-    # NORMALIZE HISTORICAL TIMESTAMP
-    # ========================================================
+
+    print()
+    print("=" * 70)
+    print("GENERATING RECURSIVE FORECAST")
+    print("=" * 70)
+
+    forecast_start = (
+        pd.to_datetime(
+            forecast_start,
+            utc=True,
+        )
+        .floor("h")
+    )
+
+    forecast_end = (
+        pd.to_datetime(
+            forecast_end,
+            utc=True,
+        )
+        .floor("h")
+    )
+
+    current_hour = (
+        utc_now_hour()
+    )
+
+    # --------------------------------------------------------
+    # Feast history must end at current completed hour.
+    # --------------------------------------------------------
+
+    expected_history_end = (
+        current_hour
+    )
+
+    expected_history_start = (
+        expected_history_end
+        - pd.Timedelta(
+            hours=HISTORY_HOURS - 1
+        )
+    )
 
     feast_history = feast_history.copy()
 
-    if "event_timestamp" not in feast_history.columns:
-        if "timestamp" in feast_history.columns:
-            feast_history = feast_history.rename(
-                columns={"timestamp": "event_timestamp"}
-            )
-        elif "datetime" in feast_history.columns:
-            feast_history = feast_history.rename(
-                columns={"datetime": "event_timestamp"}
-            )
-        else:
-            raise RuntimeError(
-                "Historical Feast dataframe has no timestamp column. "
-                f"Columns: {list(feast_history.columns)}"
-            )
-
-    feast_history["event_timestamp"] = pd.to_datetime(
-        feast_history["event_timestamp"],
-        utc=True,
+    feast_history[
+        "event_timestamp"
+    ] = (
+        pd.to_datetime(
+            feast_history[
+                "event_timestamp"
+            ],
+            utc=True,
+        )
+        .dt.floor("h")
     )
 
     feast_history = (
         feast_history
-        .sort_values("event_timestamp")
-        .reset_index(drop=True)
-    )
-
-    now_utc = (
-        pd.Timestamp.now(tz="UTC")
-    )
-
-    current_date = (
-        now_utc.date()
-    )
-
-    forecast_start = (
-        pd.Timestamp(
-            current_date,
-            tz="UTC",
+        .sort_values(
+            "event_timestamp"
         )
-        + pd.Timedelta(days=1)
-    )
-
-    forecast_end = (
-        forecast_start
-        + pd.Timedelta(hours=71)
-    )
-
-    future_df = (
-        api_df[
-            (
-                api_df["timestamp"]
-                >= forecast_start
-            )
-            &
-            (
-                api_df["timestamp"]
-                <= forecast_end
-            )
-        ]
-        .copy()
-        .sort_values("timestamp")
         .reset_index(drop=True)
     )
 
-    if len(future_df) != 72:
+    if (
+        feast_history[
+            "event_timestamp"
+        ].min()
+        != expected_history_start
+    ):
 
         raise ValueError(
-            f"Expected 72 future rows, "
-            f"received {len(future_df)}"
+            "Feast history does not start "
+            "at expected timestamp.\n"
+            f"Expected: {expected_history_start}\n"
+            f"Received: "
+            f"{feast_history['event_timestamp'].min()}"
         )
 
-    # ========================================================
-    # BUILD API HISTORY
-    # ========================================================
+    if (
+        feast_history[
+            "event_timestamp"
+        ].max()
+        != expected_history_end
+    ):
 
-    history_start = (
-        forecast_start
-        - pd.Timedelta(hours=96)
-    )
+        raise ValueError(
+            "Feast history does not end "
+            "at current hour.\n"
+            f"Expected: {expected_history_end}\n"
+            f"Received: "
+            f"{feast_history['event_timestamp'].max()}"
+        )
+
+    # --------------------------------------------------------
+    # Build API history.
+    #
+    # Weather + pollutant state:
+    #     Open-Meteo
+    #
+    # Historical AQI state:
+    #     Feast us_aqi
+    # --------------------------------------------------------
 
     api_history = (
         api_df[
             (
                 api_df["timestamp"]
-                >= history_start
+                >= expected_history_start
             )
             &
             (
                 api_df["timestamp"]
-                < forecast_start
+                <= expected_history_end
             )
         ]
         .copy()
@@ -1385,9 +2258,11 @@ def generate_forecast(
         .reset_index(drop=True)
     )
 
-    # ========================================================
-    # REPLACE API AQI HISTORY WITH FEAST AQI
-    # ========================================================
+    validate_api_history(
+        api_history=api_history,
+        expected_start=expected_history_start,
+        expected_end=expected_history_end,
+    )
 
     feast_aqi = feast_history[
         [
@@ -1396,18 +2271,41 @@ def generate_forecast(
         ]
     ].copy()
 
-    feast_aqi = feast_aqi.rename(
-        columns={
-            "event_timestamp":
-                "timestamp"
-        }
+    feast_aqi = (
+        feast_aqi
+        .rename(
+            columns={
+                "event_timestamp":
+                    "timestamp"
+            }
+        )
+    )
+
+    if feast_aqi[
+        "us_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "Feast contains missing historical us_aqi."
+        )
+
+    # --------------------------------------------------------
+    # Remove Open-Meteo historical AQI.
+    # Feast is authoritative for historical AQI.
+    # --------------------------------------------------------
+
+    api_history = (
+        api_history
+        .drop(
+            columns=[
+                "us_aqi"
+            ],
+            errors="ignore",
+        )
     )
 
     history = pd.merge(
-        api_history.drop(
-            columns=["us_aqi"],
-            errors="ignore",
-        ),
+        api_history,
         feast_aqi,
         on="timestamp",
         how="inner",
@@ -1419,299 +2317,246 @@ def generate_forecast(
         .reset_index(drop=True)
     )
 
-    if len(history) != 96:
+    if len(history) != HISTORY_HOURS:
+
         raise ValueError(
-            "Historical API/Feast alignment failed.\n"
-            f"Expected 96 hourly rows, received {len(history)}"
+            "API + Feast historical alignment failed.\n"
+            f"Expected: {HISTORY_HOURS}\n"
+            f"Received: {len(history)}"
         )
 
-    history_timestamps = (
-        history["timestamp"]
-        .sort_values()
-        .diff()
-        .dropna()
+    if history[
+        "us_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "Historical prediction state contains "
+            "missing us_aqi."
+        )
+
+    # --------------------------------------------------------
+    # FUTURE API DATA
+    #
+    # Includes:
+    #     bridge hours
+    #     + 72 forecast hours
+    # --------------------------------------------------------
+
+    future_start = (
+        current_hour
+        + pd.Timedelta(hours=1)
     )
 
-    if not history_timestamps.eq(
-        pd.Timedelta(hours=1)
-    ).all():
+    future_api = validate_future_api(
+        api_df=api_df,
+        future_start=future_start,
+        future_end=forecast_end,
+    )
+
+    # --------------------------------------------------------
+    # Bridge hours
+    #
+    # Current time -> next local midnight.
+    #
+    # These predictions are NOT saved in the final
+    # 72-hour forecast. They only establish recursive
+    # state for Day 1.
+    # --------------------------------------------------------
+
+    bridge_mask = (
+        future_api["timestamp"]
+        < forecast_start
+    )
+
+    bridge_df = (
+        future_api[
+            bridge_mask
+        ]
+        .copy()
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    forecast_df_api = (
+        future_api[
+            (
+                future_api["timestamp"]
+                >= forecast_start
+            )
+            &
+            (
+                future_api["timestamp"]
+                <= forecast_end
+            )
+        ]
+        .copy()
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    if len(forecast_df_api) != FORECAST_HOURS:
+
         raise ValueError(
-            "Historical prediction context contains "
-            "non-hourly gaps."
+            "Final forecast API window must "
+            f"contain exactly {FORECAST_HOURS} rows.\n"
+            f"Received: {len(forecast_df_api)}"
         )
 
-    predictions = []
+    print(
+        "Current UTC hour:",
+        current_hour,
+    )
 
-    feature_records = []
+    print(
+        "Forecast start UTC:",
+        forecast_start,
+    )
+
+    print(
+        "Forecast end UTC:",
+        forecast_end,
+    )
+
+    print(
+        "Bridge hours:",
+        len(bridge_df),
+    )
+
+    print(
+        "Saved forecast hours:",
+        len(forecast_df_api),
+    )
+
+    # --------------------------------------------------------
+    # RECURSIVE STATE
+    # --------------------------------------------------------
 
     working_history = (
         history.copy()
     )
 
-    # --------------------------------------------------------
-    # FEAST AQI COVERAGE VALIDATION
-    # --------------------------------------------------------
+    predictions = []
 
-    missing_aqi_timestamps = (
-        history.loc[
-            history["us_aqi"].isna(),
-            "timestamp"
-        ]
-        .tolist()
-    )
+    feature_records = []
 
-    if missing_aqi_timestamps:
-        raise ValueError(
-            "Missing Feast us_aqi values for historical "
-            "prediction context.\n"
-            f"Missing timestamps: "
-            f"{missing_aqi_timestamps[:10]}"
+    # ========================================================
+    # BRIDGE PREDICTIONS
+    # ========================================================
+
+    if not bridge_df.empty:
+
+        print()
+        print(
+            "Generating bridge predictions:"
         )
 
-    if history["us_aqi"].isna().any():
-        raise ValueError(
-            "Historical prediction context contains "
-            "null us_aqi values."
+        for _, future_row in (
+            bridge_df.iterrows()
+        ):
+
+            prediction_timestamp = (
+                future_row["timestamp"]
+            )
+
+            (
+                predicted_aqi,
+                _,
+                _,
+            ) = predict_one(
+                model=model,
+                working_history=working_history,
+                prediction_timestamp=
+                    prediction_timestamp,
+            )
+
+            working_row = (
+                build_recursive_row(
+                    future_row=future_row,
+                    predicted_aqi=
+                        predicted_aqi,
+                )
+            )
+
+            working_history = pd.concat(
+                [
+                    working_history,
+                    pd.DataFrame(
+                        [working_row]
+                    ),
+                ],
+                ignore_index=True,
+            )
+
+            working_history = (
+                working_history
+                .sort_values("timestamp")
+                .tail(HISTORY_HOURS)
+                .reset_index(drop=True)
+            )
+
+        print(
+            "✓ Bridge predictions:",
+            len(bridge_df),
         )
 
-    # --------------------------------------------------------
-    # HISTORY TIMESTAMP VALIDATION
-    # --------------------------------------------------------
+    else:
 
-    expected_last_history_timestamp = (
-        forecast_start
-        - pd.Timedelta(hours=1)
-    )
-
-    if history.empty:
-        raise ValueError(
-            "Historical API context is empty."
+        print(
+            "✓ No bridge hours required."
         )
 
-    actual_last_history_timestamp = (
-        history["timestamp"].max()
+    # ========================================================
+    # FINAL 72-HOUR FORECAST
+    # ========================================================
+
+    print()
+    print(
+        "Generating 72 forecast predictions:"
     )
 
-    if (
-        actual_last_history_timestamp
-        != expected_last_history_timestamp
+    for step, (_, future_row) in enumerate(
+        forecast_df_api.iterrows(),
+        start=1,
     ):
-        raise ValueError(
-            "Historical context does not reach the "
-            "last hour before forecast.\n"
-            f"Expected: {expected_last_history_timestamp}\n"
-            f"Received: {actual_last_history_timestamp}"
-        )
-
-    if len(history) != 96:
-        raise ValueError(
-            "Expected exactly 96 historical API rows.\n"
-            f"Received: {len(history)}"
-        )
-
-    history_deltas = (
-        history["timestamp"]
-        .diff()
-        .dropna()
-    )
-
-    if not history_deltas.eq(
-        pd.Timedelta(hours=1)
-    ).all():
-        raise ValueError(
-            "API historical context contains "
-            "non-hourly gaps."
-        )
-
-    # ========================================================
-    # RECURSIVE 72 HOURS
-    # ========================================================
-
-    for step in range(72):
-
-        future_row = (
-            future_df
-            .iloc[step]
-        )
 
         prediction_timestamp = (
             future_row["timestamp"]
         )
 
-        # --------------------------------------------------------
-        # FEATURE TIMESTAMP
-        # --------------------------------------------------------
-        #
-        # The trained target is:
-        #
-        #     target_aqi = us_aqi.shift(-1)
-        #
-        # Therefore features at timestamp T predict AQI
-        # at timestamp T + 1 hour.
-        #
-        # For forecast timestamp F, the model input must
-        # correspond to F - 1 hour.
-        # --------------------------------------------------------
-
-        anchor_timestamp = (
-            prediction_timestamp
-            - pd.Timedelta(hours=1)
-        )
-
-        # --------------------------------------------------------
-        # BUILD FEATURES FROM THE COMPLETE CURRENT STATE
-        # --------------------------------------------------------
-
-        feature_frame = create_features(
-            working_history
-        )
-
-        anchor_rows = feature_frame[
-            feature_frame["timestamp"]
-            == anchor_timestamp
-        ]
-
-        if anchor_rows.empty:
-            raise ValueError(
-                "Missing feature anchor: "
-                f"{anchor_timestamp}"
-            )
-
-        row = (
-            anchor_rows
-            .iloc[-1]
-        )
-
-        X = (
-            row[
-                FEATURE_COLUMNS
-            ]
-            .to_frame()
-            .T
-            .astype(float)
-        )
-            
-
-        # ----------------------------------------------
-        # EXACT 70 FEATURE CHECK
-        # ----------------------------------------------
-
-        X = X.astype(float)
-
-        assert X.shape[1] == 70
-
-
-        if X.isna().any().any():
-
-            missing = (
-                X.columns[
-                    X.isna().any()
-                ]
-                .tolist()
-            )
-
-            raise ValueError(
-                "Missing prediction features:\n"
-                + "\n".join(missing)
-            )
-
-        # ----------------------------------------------
-        # Predict
-        # ----------------------------------------------
-         
-        def validate_prediction_features(
-            X,
-        ):
-            if not isinstance(X, pd.DataFrame):
-                X = pd.DataFrame(X)
-
-            missing = sorted(
-                set(FEATURE_COLUMNS) - set(X.columns)
-            )
-
-            extra = sorted(
-                set(X.columns) - set(FEATURE_COLUMNS)
-            )
-
-            if missing:
-                raise ValueError(
-                    "Prediction input is missing features:\n"
-                    + "\n".join(missing)
-                )
-
-            if extra:
-                X = X.drop(
-                    columns=extra
-                )
-
-            X = X[
-                FEATURE_COLUMNS
-            ].copy()
-
-            if X.shape[1] != 70:
-                raise ValueError(
-                    f"Prediction requires 70 features; "
-                    f"received {X.shape[1]}"
-                )
-
-            if X.isna().any().any():
-                missing_values = (
-                    X.columns[
-                        X.isna().any()
-                    ].tolist()
-                )
-
-                raise ValueError(
-                    "Prediction input contains NaN values:\n"
-                    + "\n".join(missing_values)
-                )
-
-            if "target_aqi" in X.columns:
-                raise ValueError(
-                    "target_aqi leaked into prediction input."
-                )
-
-            if "us_aqi" in X.columns:
-                raise ValueError(
-                    "us_aqi leaked into prediction input."
-                )
-
-            return X
-
-        X = validate_prediction_features(
-            X
-        )
-
-        prediction = model.predict(X)
-
-        predicted_aqi = float(
-            np.asarray(
-                prediction
-            )
-            .reshape(-1)[0]
-        )
-
-        predicted_aqi = max(
-            0.0,
+        (
             predicted_aqi,
+            X,
+            anchor_timestamp,
+        ) = predict_one(
+            model=model,
+            working_history=working_history,
+            prediction_timestamp=
+                prediction_timestamp,
         )
+
+        # ----------------------------------------------------
+        # Save forecast prediction
+        # ----------------------------------------------------
 
         predictions.append(
             {
                 "timestamp":
                     prediction_timestamp,
+
                 "predicted_aqi":
                     predicted_aqi,
             }
         )
 
-        # ----------------------------------------------
-        # Save exact feature vector
-        # ----------------------------------------------
+        # ----------------------------------------------------
+        # Save exact 70-feature model vector
+        # ----------------------------------------------------
 
         feature_record = {
             column:
-                float(X.iloc[0][column])
+                float(
+                    X.iloc[0][column]
+                )
             for column in FEATURE_COLUMNS
         }
 
@@ -1723,84 +2568,26 @@ def generate_forecast(
             feature_record
         )
 
-        # ----------------------------------------------
+        # ----------------------------------------------------
         # Recursive state
-        # ----------------------------------------------
+        #
+        # Future AQI is now the model prediction.
+        # Open-Meteo us_aqi is NOT used here.
+        # ----------------------------------------------------
 
-        predicted_row = {
-
-            "timestamp":
-                prediction_timestamp,
-
-            "temperature_2m":
-                future_row[
-                    "temperature_2m"
-                ],
-
-            "relative_humidity_2m":
-                future_row[
-                    "relative_humidity_2m"
-                ],
-
-            "pressure_msl":
-                future_row[
-                    "pressure_msl"
-                ],
-
-            "precipitation":
-                future_row[
-                    "precipitation"
-                ],
-
-            "wind_speed_10m":
-                future_row[
-                    "wind_speed_10m"
-                ],
-
-            "wind_direction_10m":
-                future_row[
-                    "wind_direction_10m"
-                ],
-
-            "pm2_5":
-                future_row[
-                    "pm2_5"
-                ],
-
-            "pm10":
-                future_row[
-                    "pm10"
-                ],
-
-            "carbon_monoxide":
-                future_row[
-                    "carbon_monoxide"
-                ],
-
-            "nitrogen_dioxide":
-                future_row[
-                    "nitrogen_dioxide"
-                ],
-
-            "sulphur_dioxide":
-                future_row[
-                    "sulphur_dioxide"
-                ],
-
-            "ozone":
-                future_row[
-                    "ozone"
-                ],
-
-            "us_aqi":
-                predicted_aqi,
-        }
+        recursive_row = (
+            build_recursive_row(
+                future_row=future_row,
+                predicted_aqi=
+                    predicted_aqi,
+            )
+        )
 
         working_history = pd.concat(
             [
                 working_history,
                 pd.DataFrame(
-                    [predicted_row]
+                    [recursive_row]
                 ),
             ],
             ignore_index=True,
@@ -1813,18 +2600,53 @@ def generate_forecast(
             .reset_index(drop=True)
         )
 
-    forecast_df = (
-        pd.DataFrame(
-            predictions
-        )
+        if (
+            step == 1
+            or step % 12 == 0
+            or step == FORECAST_HOURS
+        ):
+
+            print(
+                f"  {step:02d}/{FORECAST_HOURS} "
+                f"| {prediction_timestamp} "
+                f"| AQI = "
+                f"{predicted_aqi:.2f}"
+            )
+
+    # ========================================================
+    # HOURLY FORECAST DATAFRAME
+    # ========================================================
+
+    hourly_forecast = pd.DataFrame(
+        predictions
     )
 
-    forecast_df[
+    if len(hourly_forecast) != 72:
+
+        raise ValueError(
+            "Final hourly forecast must "
+            "contain exactly 72 predictions."
+        )
+
+    hourly_forecast[
+        "timestamp"
+    ] = pd.to_datetime(
+        hourly_forecast[
+            "timestamp"
+        ],
+        utc=True,
+    )
+
+    hourly_forecast[
         "forecast_day"
     ] = (
-        forecast_df[
+        hourly_forecast[
             "timestamp"
-        ].dt.date
+        ]
+        .dt.tz_convert(
+            LOCAL_TIMEZONE
+        )
+        .dt.strftime("%Y-%m-%d")
     )
 
     # ========================================================
@@ -1832,7 +2654,7 @@ def generate_forecast(
     # ========================================================
 
     daily_forecast = (
-        forecast_df
+        hourly_forecast
         .groupby(
             "forecast_day",
             as_index=False,
@@ -1845,22 +2667,25 @@ def generate_forecast(
         )
     )
 
-    if len(
-        forecast_df
-    ) != 72:
+    # --------------------------------------------------------
+    # EXACTLY THREE DAYS
+    # --------------------------------------------------------
+
+    if len(daily_forecast) != 3:
+
         raise ValueError(
-            "Expected 72 predictions."
+            "Expected exactly 3 daily forecasts.\n"
+            f"Received: {len(daily_forecast)}\n"
+            f"Days: "
+            f"{daily_forecast['forecast_day'].tolist()}"
         )
 
-    if len(
-        daily_forecast
-    ) != 3:
-        raise ValueError(
-            "Expected 3 daily averages."
-        )
+    # --------------------------------------------------------
+    # EXACTLY 24 HOURS PER DAY
+    # --------------------------------------------------------
 
-    counts = (
-        forecast_df
+    daily_counts = (
+        hourly_forecast
         .groupby(
             "forecast_day"
         )
@@ -1868,18 +2693,21 @@ def generate_forecast(
     )
 
     if not (
-        counts == 24
+        daily_counts == 24
     ).all():
 
         raise ValueError(
-            "Every forecast day must "
-            "contain exactly 24 predictions."
+            "Each forecast day must contain "
+            "exactly 24 predictions.\n"
+            f"Counts:\n{daily_counts}"
         )
 
-    feature_df = (
-        pd.DataFrame(
-            feature_records
-        )
+    # ========================================================
+    # FEATURE OUTPUT
+    # ========================================================
+
+    feature_df = pd.DataFrame(
+        feature_records
     )
 
     feature_df = feature_df[
@@ -1893,21 +2721,70 @@ def generate_forecast(
         72,
         71,
     ):
+
         raise ValueError(
-            "Forecast feature output must "
-            "contain 72 rows + timestamp + "
-            "70 features."
+            "Forecast feature output has "
+            "incorrect shape.\n"
+            f"Expected: (72, 71)\n"
+            f"Received: {feature_df.shape}"
         )
 
+    # ========================================================
+    # FINAL CHECKS
+    # ========================================================
+
+    if hourly_forecast[
+        "predicted_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "Hourly forecast contains "
+            "missing predictions."
+        )
+
+    if daily_forecast[
+        "predicted_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "Daily forecast contains "
+            "missing predictions."
+        )
+
+    print()
+    print(
+        "✓ 72 recursive forecast predictions"
+    )
+
+    print(
+        "✓ 3 daily averages"
+    )
+
+    print(
+        "✓ 24 predictions per day"
+    )
+
+    print(
+        "✓ 70 model features per prediction"
+    )
+
+    print(
+        "✓ us_aqi never passed to MLflow"
+    )
+
+    print(
+        "✓ target_aqi never passed to MLflow"
+    )
+
     return (
-        forecast_df,
+        hourly_forecast,
         daily_forecast,
         feature_df,
     )
 
 
 # ============================================================
-# SAVE
+# SAVE OUTPUTS
 # ============================================================
 
 def save_outputs(
@@ -1916,20 +2793,39 @@ def save_outputs(
     feature_df,
 ):
 
+    print()
+    print("=" * 70)
+    print("SAVING PREDICTION OUTPUTS")
+    print("=" * 70)
+
     PREDICTION_DIR.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    forecast_df[
-        [
-            "timestamp",
-            "predicted_aqi",
+    # --------------------------------------------------------
+    # HOURLY
+    # --------------------------------------------------------
+
+    hourly_output = (
+        forecast_df[
+            [
+                "timestamp",
+                "forecast_day",
+                "predicted_aqi",
+            ]
         ]
-    ].to_csv(
+        .copy()
+    )
+
+    hourly_output.to_csv(
         HOURLY_PREDICTION_FILE,
         index=False,
     )
+
+    # --------------------------------------------------------
+    # DAILY
+    # --------------------------------------------------------
 
     daily_forecast[
         [
@@ -1941,37 +2837,77 @@ def save_outputs(
         index=False,
     )
 
+    # --------------------------------------------------------
+    # FEATURES
+    # --------------------------------------------------------
+
     feature_df.to_csv(
         FEATURE_PREDICTION_FILE,
         index=False,
     )
 
-    assert (
-        len(
-            pd.read_csv(
-                HOURLY_PREDICTION_FILE
-            )
-        )
-        == 72
+    # --------------------------------------------------------
+    # RELOAD VERIFICATION
+    # --------------------------------------------------------
+
+    hourly_check = pd.read_csv(
+        HOURLY_PREDICTION_FILE
     )
 
-    assert (
-        len(
-            pd.read_csv(
-                DAILY_PREDICTION_FILE
-            )
-        )
-        == 3
+    daily_check = pd.read_csv(
+        DAILY_PREDICTION_FILE
     )
 
-    assert (
-        len(
-            pd.read_csv(
-                FEATURE_PREDICTION_FILE
-            )
-        )
-        == 72
+    feature_check = pd.read_csv(
+        FEATURE_PREDICTION_FILE
     )
+
+    if len(hourly_check) != 72:
+
+        raise ValueError(
+            "Saved hourly forecast does not "
+            "contain 72 rows."
+        )
+
+    if len(daily_check) != 3:
+
+        raise ValueError(
+            "Saved daily forecast does not "
+            "contain 3 rows."
+        )
+
+    if len(feature_check) != 72:
+
+        raise ValueError(
+            "Saved feature forecast does not "
+            "contain 72 rows."
+        )
+
+    if feature_check.shape[1] != 71:
+
+        raise ValueError(
+            "Saved feature file must contain "
+            "timestamp + 70 features."
+        )
+
+    print(
+        "Hourly file:",
+        HOURLY_PREDICTION_FILE,
+    )
+
+    print(
+        "Daily file:",
+        DAILY_PREDICTION_FILE,
+    )
+
+    print(
+        "Feature file:",
+        FEATURE_PREDICTION_FILE,
+    )
+
+    print("✓ Hourly output: 72 rows")
+    print("✓ Daily output: 3 rows")
+    print("✓ Feature output: 72 rows × 71 columns")
 
 
 # ============================================================
@@ -1983,102 +2919,188 @@ def main():
     print_header()
 
     # ========================================================
-    # MLflow champion
+    # CURRENT TIME / FORECAST WINDOW
+    # ========================================================
+
+    current_hour = (
+        utc_now_hour()
+    )
+
+    forecast_start = (
+        next_local_midnight_utc()
+    )
+
+    forecast_end = (
+        forecast_start
+        + pd.Timedelta(hours=71)
+    )
+
+    if forecast_start <= current_hour:
+
+        raise RuntimeError(
+            "Invalid forecast window.\n"
+            f"Current: {current_hour}\n"
+            f"Forecast start: {forecast_start}"
+        )
+
+    print()
+    print("=" * 70)
+    print("FORECAST WINDOW")
+    print("=" * 70)
+
+    print(
+        "Current UTC:",
+        current_hour,
+    )
+
+    print(
+        "Current local:",
+        current_hour.tz_convert(
+            LOCAL_TIMEZONE
+        ),
+    )
+
+    print(
+        "Forecast start UTC:",
+        forecast_start,
+    )
+
+    print(
+        "Forecast start local:",
+        forecast_start.tz_convert(
+            LOCAL_TIMEZONE
+        ),
+    )
+
+    print(
+        "Forecast end UTC:",
+        forecast_end,
+    )
+
+    print(
+        "Forecast end local:",
+        forecast_end.tz_convert(
+            LOCAL_TIMEZONE
+        ),
+    )
+
+    # ========================================================
+    # LOAD MLFLOW
     # ========================================================
 
     model = load_model()
 
     # ========================================================
-    # Feast
+    # LOAD FEAST
     # ========================================================
 
     store = load_feast()
 
     # ========================================================
-    # Open-Meteo
+    # FETCH OPEN-METEO
     # ========================================================
 
-    weather = fetch_weather()
+    weather = fetch_weather(
+        forecast_end_utc=forecast_end
+    )
 
-    air = fetch_air_quality()
+    air = fetch_air_quality(
+        forecast_end_utc=forecast_end
+    )
 
     api_df = merge_api_data(
-        weather,
-        air,
+        weather=weather,
+        air=air,
     )
 
     # ========================================================
-    # LAST 96 HOURS FOR FEAST
+    # VALIDATE API COVERAGE
     # ========================================================
 
-    now_utc = (
-        pd.Timestamp.now(tz="UTC")
-    )
-
-    forecast_start = (
-        pd.Timestamp(
-            now_utc.date(),
-            tz="UTC",
+    required_api_start = (
+        current_hour
+        - pd.Timedelta(
+            hours=HISTORY_HOURS - 1
         )
-        + pd.Timedelta(days=1)
     )
 
-    history_start = (
-        forecast_start
-        - pd.Timedelta(hours=96)
-    )
+    if (
+        api_df["timestamp"].min()
+        > required_api_start
+    ):
 
-    api_df["timestamp"] = pd.to_datetime(
-        api_df["timestamp"],
-        utc=True,
-    )
+        raise ValueError(
+            "Open-Meteo does not provide the "
+            "required 96-hour historical context.\n"
+            f"Required from: {required_api_start}\n"
+            f"Available from: "
+            f"{api_df['timestamp'].min()}"
+        )
 
-    api_df = (
-        api_df
-        .sort_values("timestamp")
-        .drop_duplicates("timestamp")
-        .reset_index(drop=True)
-    )
+    if (
+        api_df["timestamp"].max()
+        < forecast_end
+    ):
 
-    latest_api_timestamp = (
-        api_df.loc[
-            api_df["timestamp"] < forecast_start,
-            "timestamp"
-        ]
-        .max()
-        .floor("h")
-    )
+        raise ValueError(
+            "Open-Meteo does not provide the "
+            "complete forecast horizon.\n"
+            f"Required through: {forecast_end}\n"
+            f"Available through: "
+            f"{api_df['timestamp'].max()}"
+        )
 
-    print(
-        "Latest historical API timestamp:",
-        latest_api_timestamp,
-    )
-
-    feast_history = get_historical_context(
-        PROJECT_ROOT,
-        latest_api_timestamp,
-    )
-        
     # ========================================================
-    # FORECAST
+    # FEAST HISTORICAL CONTEXT
+    #
+    # IMPORTANT:
+    # Feast is queried only through the current hour.
+    # We never request future Feast timestamps.
     # ========================================================
-     
+
+    feast_history = (
+        get_historical_context(
+            store=store,
+            latest_timestamp=current_hour,
+        )
+    )
+
+    # ========================================================
+    # DEBUG / CONTRACT SUMMARY
+    # ========================================================
+
+    print()
     print("=" * 70)
     print("HISTORICAL CONTEXT VALIDATION")
     print("=" * 70)
-    print("Rows:", len(feast_history))
-    print("Columns:", len(feast_history.columns))
-    print("Has event_timestamp:", "event_timestamp" in feast_history.columns)
+
+    print(
+        "Rows:",
+        len(feast_history),
+    )
+
+    print(
+        "Columns:",
+        len(feast_history.columns),
+    )
+
+    print(
+        "Has event_timestamp:",
+        "event_timestamp"
+        in feast_history.columns,
+    )
+
     print(
         "Timestamp range:",
-        feast_history["event_timestamp"].min()
-        if "event_timestamp" in feast_history.columns
-        else "MISSING",
+        feast_history[
+            "event_timestamp"
+        ].min(),
         "->",
-        feast_history["event_timestamp"].max()
-        if "event_timestamp" in feast_history.columns
-        else "MISSING",
+        feast_history[
+            "event_timestamp"
+        ].max(),
     )
+
     print(
         "Missing model features:",
         sorted(
@@ -2086,14 +3108,23 @@ def main():
             - set(feast_history.columns)
         ),
     )
+
     print(
         "Has target_aqi:",
-        "target_aqi" in feast_history.columns,
+        "target_aqi"
+        in feast_history.columns,
     )
+
     print(
         "Has us_aqi:",
-        "us_aqi" in feast_history.columns,
-    ) 
+        "us_aqi"
+        in feast_history.columns,
+    )
+
+    # ========================================================
+    # GENERATE FORECAST
+    # ========================================================
+
     (
         forecast_df,
         daily_forecast,
@@ -2102,6 +3133,8 @@ def main():
         model=model,
         feast_history=feast_history,
         api_df=api_df,
+        forecast_start=forecast_start,
+        forecast_end=forecast_end,
     )
 
     # ========================================================
@@ -2109,21 +3142,27 @@ def main():
     # ========================================================
 
     save_outputs(
-        forecast_df,
-        daily_forecast,
-        feature_df,
+        forecast_df=forecast_df,
+        daily_forecast=daily_forecast,
+        feature_df=feature_df,
     )
 
     # ========================================================
     # FINAL VERIFICATION
     # ========================================================
 
-    print("\n" + "=" * 70)
+    print()
+    print("=" * 70)
     print("PREDICTION PIPELINE VERIFIED")
     print("=" * 70)
 
     print(
-        "Feast model features loaded:",
+        "Feast context features:",
+        71,
+    )
+
+    print(
+        "MLflow model features:",
         70,
     )
 
@@ -2142,18 +3181,17 @@ def main():
         len(daily_forecast),
     )
 
-    print(
-        "\nDAILY AQI"
-    )
-
+    print()
+    print("DAILY AQI")
     print(
         daily_forecast.to_string(
             index=False
         )
     )
 
+    print()
     print(
-        "\nHourly prediction file:",
+        "Hourly prediction file:",
         HOURLY_PREDICTION_FILE,
     )
 
@@ -2166,6 +3204,10 @@ def main():
         "Feature file:",
         FEATURE_PREDICTION_FILE,
     )
+
+    # --------------------------------------------------------
+    # HARD ASSERTIONS
+    # --------------------------------------------------------
 
     assert len(
         forecast_df
@@ -2184,10 +3226,56 @@ def main():
         == 71
     )
 
-    print(
-        "\nALL PREDICTION CHECKS PASSED"
+    assert (
+        "target_aqi"
+        not in feature_df.columns
     )
 
+    assert (
+        "us_aqi"
+        not in feature_df.columns
+    )
+
+    assert (
+        set(FEATURE_COLUMNS)
+        == set(
+            feature_df.columns
+        ) - {"timestamp"}
+    )
+
+    print()
+    print(
+        "ALL PREDICTION CHECKS PASSED"
+    )
+    print(
+        "70 model features: PASS"
+    )
+    print(
+        "us_aqi recursive state: PASS"
+    )
+    print(
+        "target_aqi excluded: PASS"
+    )
+    print(
+        "72 hourly predictions: PASS"
+    )
+    print(
+        "3 daily averages: PASS"
+    )
+    print(
+        "24 predictions per day: PASS"
+    )
+    print(
+        "MLflow champion: PASS"
+    )
+    print(
+        "FEAST -> MODEL CONTRACT: PASS"
+    )
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
     main()
