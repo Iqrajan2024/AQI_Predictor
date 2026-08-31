@@ -54,7 +54,7 @@ jobs:
             xgboost \
             joblib \
             mlflow \
-            "feast[duckdb]"\
+            "feast[duckdb]==0.66.0"\
             duckdb
 
       # ======================================================
@@ -88,7 +88,7 @@ jobs:
           echo "Latest feature run: $RUN_ID"
 
       # ======================================================
-      # 5. DOWNLOAD FEATURE ARTIFACT
+      # 5. DOWNLOAD + VERIFY FEATURE ARTIFACT
       # ======================================================
 
       - name: Download latest feature artifact
@@ -99,6 +99,7 @@ jobs:
 
         run: |
 
+          rm -rf .feature_restore
           mkdir -p .feature_restore
 
           gh run download \
@@ -107,12 +108,24 @@ jobs:
             --name aqi-pipeline-data \
             --dir .feature_restore
 
-          find .feature_restore \
-            -type f \
-            -print
+          echo "===== DOWNLOADED FEATURE ARTIFACT ====="
+          find .feature_restore -type f -print
 
-      - name: Verify restored feature dataset
+          test -f \
+            ".feature_restore/data/processed/aqi_features.parquet"
+
+          echo "FEATURE ARTIFACT DOWNLOAD: PASS"
+
+
+      - name: Restore and verify feature dataset
         run: |
+
+          mkdir -p data/processed
+
+          cp \
+            ".feature_restore/data/processed/aqi_features.parquet" \
+            "data/processed/aqi_features.parquet"
+
           python - <<'PY'
           from pathlib import Path
           import pandas as pd
@@ -123,19 +136,25 @@ jobs:
 
           df = pd.read_parquet(path)
 
-          print("Feature dataset shape:", df.shape)
-          print("Columns:", len(df.columns))
-          print("First:", df["timestamp"].min())
-          print("Last:", df["timestamp"].max())
-
+          assert not df.empty
           assert "location_id" in df.columns
           assert "timestamp" in df.columns
           assert "us_aqi" in df.columns
           assert "target_aqi" in df.columns
 
-          assert not df.empty
+          assert df["location_id"].notna().all()
+          assert df["us_aqi"].notna().all()
 
-          print("FEATURE ARTIFACT RESTORE: PASS")
+          print("======================================")
+          print("FEATURE DATASET RESTORE: PASS")
+          print("======================================")
+          print("Shape:", df.shape)
+          print("Columns:", len(df.columns))
+          print("First:", df["timestamp"].min())
+          print("Last:", df["timestamp"].max())
+          print("us_aqi present: YES")
+          print("target_aqi present: YES")
+          print("======================================")
           PY
 
       # ======================================================
@@ -145,15 +164,7 @@ jobs:
       - name: Restore feature state
         run: |
 
-          mkdir -p data/processed
           mkdir -p feature_repo/feature_repo/data
-
-          test -f \
-            ".feature_restore/data/processed/aqi_features.parquet"
-
-          cp \
-            ".feature_restore/data/processed/aqi_features.parquet" \
-            "data/processed/aqi_features.parquet"
 
           if [ -f ".feature_restore/feature_repo/feature_repo/data/registry.db" ]; then
 
@@ -171,8 +182,8 @@ jobs:
 
           fi
 
-          ls -lh \
-            data/processed/aqi_features.parquet
+          echo "FEAST STATE RESTORE: PASS"
+          ls -lh feature_repo/feature_repo/data || true
 
       # ======================================================
       # 7. APPLY FEAST
