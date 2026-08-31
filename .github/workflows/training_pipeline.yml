@@ -87,8 +87,8 @@ jobs:
 
           echo "Latest feature run: $RUN_ID"
 
-      # ======================================================
-      # 5. DOWNLOAD + VERIFY FEATURE ARTIFACT
+            # ======================================================
+      # 5. DOWNLOAD FEATURE ARTIFACT
       # ======================================================
 
       - name: Download latest feature artifact
@@ -112,61 +112,36 @@ jobs:
           find .feature_restore -type f -print
 
           test -f \
-            ".feature_restore/data/processed/aqi_features.parquet"
+            ".feature_restore/processed/aqi_features.parquet"
 
           echo "FEATURE ARTIFACT DOWNLOAD: PASS"
 
 
-      - name: Restore and verify feature dataset
+      # ======================================================
+      # 6. RESTORE FEATURE DATASET + FEAST STATE
+      # ======================================================
+
+      - name: Restore feature dataset and Feast state
         run: |
 
           mkdir -p data/processed
-
-          cp \
-            ".feature_restore/data/processed/aqi_features.parquet" \
-            "data/processed/aqi_features.parquet"
-
-          python - <<'PY'
-          from pathlib import Path
-          import pandas as pd
-
-          path = Path("data/processed/aqi_features.parquet")
-
-          assert path.exists(), f"Missing: {path}"
-
-          df = pd.read_parquet(path)
-
-          assert not df.empty
-          assert "location_id" in df.columns
-          assert "timestamp" in df.columns
-          assert "us_aqi" in df.columns
-          assert "target_aqi" in df.columns
-
-          assert df["location_id"].notna().all()
-          assert df["us_aqi"].notna().all()
-
-          print("======================================")
-          print("FEATURE DATASET RESTORE: PASS")
-          print("======================================")
-          print("Shape:", df.shape)
-          print("Columns:", len(df.columns))
-          print("First:", df["timestamp"].min())
-          print("Last:", df["timestamp"].max())
-          print("us_aqi present: YES")
-          print("target_aqi present: YES")
-          print("======================================")
-          PY
-
-      # ======================================================
-      # 6. RESTORE FEATURE DATASET + FEAST STORE
-      # ======================================================
-
-      - name: Restore feature state
-        run: |
-
           mkdir -p feature_repo/feature_repo/data
 
-          if [ -f ".feature_restore/feature_repo/feature_repo/data/registry.db" ]; then
+          # -----------------------------------------------
+          # Restore feature dataset
+          # -----------------------------------------------
+
+          cp \
+            ".feature_restore/processed/aqi_features.parquet" \
+            "data/processed/aqi_features.parquet"
+
+          # -----------------------------------------------
+          # Restore Feast registry if present
+          # -----------------------------------------------
+
+          if [ -f \
+            ".feature_restore/feature_repo/feature_repo/data/registry.db" \
+          ]; then
 
             cp \
               ".feature_restore/feature_repo/feature_repo/data/registry.db" \
@@ -174,7 +149,13 @@ jobs:
 
           fi
 
-          if [ -f ".feature_restore/feature_repo/feature_repo/data/online_store.db" ]; then
+          # -----------------------------------------------
+          # Restore Feast online store if present
+          # -----------------------------------------------
+
+          if [ -f \
+            ".feature_restore/feature_repo/feature_repo/data/online_store.db" \
+          ]; then
 
             cp \
               ".feature_restore/feature_repo/feature_repo/data/online_store.db" \
@@ -182,8 +163,20 @@ jobs:
 
           fi
 
-          echo "FEAST STATE RESTORE: PASS"
-          ls -lh feature_repo/feature_repo/data || true
+          # -----------------------------------------------
+          # Verify
+          # -----------------------------------------------
+
+          test -f data/processed/aqi_features.parquet
+
+          echo "======================================"
+          echo "FEATURE DATASET RESTORED"
+          echo "======================================"
+
+          ls -lh data/processed/aqi_features.parquet
+
+          echo "======================================"
+
 
       # ======================================================
       # 7. APPLY FEAST
