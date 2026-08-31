@@ -1,17 +1,26 @@
 from datetime import timedelta
 
-from feast import Entity, Feature, FeatureView, FileSource, FeatureService
-from feast.types import Float32, Int64, String
+from feast import (
+    Entity,
+    FeatureView,
+    Field,
+    FileSource,
+    FeatureService,
+)
 
+from feast.types import (
+    Int32,
+    Float64,
+    String,
+)
 
 # ============================================================
 # ENTITY
 # ============================================================
 
-aqi_location = Entity(
-    name="aqi_location",
+location_id = Entity(
+    name="location_id",
     description="Single AQI monitoring location",
-    value_type=String,
 )
 
 
@@ -32,7 +41,7 @@ aqi_features_source = FileSource(
 
 aqi_features = FeatureView(
     name="aqi_features",
-    entities=[aqi_location],
+    entities=[location_id],
     ttl=timedelta(days=30),
     online=True,
     source=aqi_features_source,
@@ -42,163 +51,163 @@ aqi_features = FeatureView(
         # WEATHER
         # ----------------------------------------------------
 
-        Feature(name="temperature_2m", dtype=Float32),
-        Feature(name="relative_humidity_2m", dtype=Float32),
-        Feature(name="pressure_msl", dtype=Float32),
-        Feature(name="precipitation", dtype=Float32),
-        Feature(name="wind_speed_10m", dtype=Float32),
-        Feature(name="wind_direction_10m", dtype=Float32),
+        Field(name="temperature_2m", dtype=Float64),
+        Field(name="relative_humidity_2m", dtype=Float64),
+        Field(name="pressure_msl", dtype=Float64),
+        Field(name="precipitation", dtype=Float64),
+        Field(name="wind_speed_10m", dtype=Float64),
+        Field(name="wind_direction_10m", dtype=Float64),
 
         # ----------------------------------------------------
         # POLLUTANTS
         # ----------------------------------------------------
 
-        Feature(name="pm2_5", dtype=Float32),
-        Feature(name="pm10", dtype=Float32),
-        Feature(name="carbon_monoxide", dtype=Float32),
-        Feature(name="nitrogen_dioxide", dtype=Float32),
-        Feature(name="sulphur_dioxide", dtype=Float32),
-        Feature(name="ozone", dtype=Float32),
+        Field(name="pm2_5", dtype=Float64),
+        Field(name="pm10", dtype=Float64),
+        Field(name="carbon_monoxide", dtype=Float64),
+        Field(name="nitrogen_dioxide", dtype=Float64),
+        Field(name="sulphur_dioxide", dtype=Float64),
+        Field(name="ozone", dtype=Float64),
 
         # ----------------------------------------------------
         # TIME
         # ----------------------------------------------------
 
-        Feature(name="hour", dtype=Int64),
-        Feature(name="day_of_week", dtype=Int64),
-        Feature(name="day_of_month", dtype=Int64),
-        Feature(name="month", dtype=Int64),
-        Feature(name="is_weekend", dtype=Int64),
+        Field(name="hour", dtype=Int32),
+        Field(name="day_of_week", dtype=Int32),
+        Field(name="day_of_month", dtype=Int32),
+        Field(name="month", dtype=Int32),
+        Field(name="is_weekend", dtype=Int32),
 
         # ----------------------------------------------------
         # AQI LAGS
         # ----------------------------------------------------
 
-        Feature(name="aqi_lag_1", dtype=Float32),
-        Feature(name="aqi_lag_3", dtype=Float32),
-        Feature(name="aqi_lag_6", dtype=Float32),
-        Feature(name="aqi_lag_12", dtype=Float32),
-        Feature(name="aqi_lag_24", dtype=Float32),
-        Feature(name="aqi_lag_48", dtype=Float32),
-        Feature(name="aqi_lag_72", dtype=Float32),
+        Field(name="aqi_lag_1", dtype=Float64),
+        Field(name="aqi_lag_3", dtype=Float64),
+        Field(name="aqi_lag_6", dtype=Float64),
+        Field(name="aqi_lag_12", dtype=Float64),
+        Field(name="aqi_lag_24", dtype=Float64),
+        Field(name="aqi_lag_48", dtype=Float64),
+        Field(name="aqi_lag_72", dtype=Float64),
 
         # ----------------------------------------------------
         # PM2.5 LAGS
         # ----------------------------------------------------
 
-        Feature(name="pm2_5_lag_1", dtype=Float32),
-        Feature(name="pm2_5_lag_3", dtype=Float32),
-        Feature(name="pm2_5_lag_6", dtype=Float32),
-        Feature(name="pm2_5_lag_24", dtype=Float32),
+        Field(name="pm2_5_lag_1", dtype=Float64),
+        Field(name="pm2_5_lag_3", dtype=Float64),
+        Field(name="pm2_5_lag_6", dtype=Float64),
+        Field(name="pm2_5_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # PM10 LAGS
         # ----------------------------------------------------
 
-        Feature(name="pm10_lag_1", dtype=Float32),
-        Feature(name="pm10_lag_3", dtype=Float32),
-        Feature(name="pm10_lag_6", dtype=Float32),
-        Feature(name="pm10_lag_24", dtype=Float32),
+        Field(name="pm10_lag_1", dtype=Float64),
+        Field(name="pm10_lag_3", dtype=Float64),
+        Field(name="pm10_lag_6", dtype=Float64),
+        Field(name="pm10_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # CO LAGS
         # ----------------------------------------------------
 
-        Feature(name="carbon_monoxide_lag_1", dtype=Float32),
-        Feature(name="carbon_monoxide_lag_3", dtype=Float32),
-        Feature(name="carbon_monoxide_lag_6", dtype=Float32),
-        Feature(name="carbon_monoxide_lag_24", dtype=Float32),
+        Field(name="carbon_monoxide_lag_1", dtype=Float64),
+        Field(name="carbon_monoxide_lag_3", dtype=Float64),
+        Field(name="carbon_monoxide_lag_6", dtype=Float64),
+        Field(name="carbon_monoxide_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # NO2 LAGS
         # ----------------------------------------------------
 
-        Feature(name="nitrogen_dioxide_lag_1", dtype=Float32),
-        Feature(name="nitrogen_dioxide_lag_3", dtype=Float32),
-        Feature(name="nitrogen_dioxide_lag_6", dtype=Float32),
-        Feature(name="nitrogen_dioxide_lag_24", dtype=Float32),
+        Field(name="nitrogen_dioxide_lag_1", dtype=Float64),
+        Field(name="nitrogen_dioxide_lag_3", dtype=Float64),
+        Field(name="nitrogen_dioxide_lag_6", dtype=Float64),
+        Field(name="nitrogen_dioxide_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # SO2 LAGS
         # ----------------------------------------------------
 
-        Feature(name="sulphur_dioxide_lag_1", dtype=Float32),
-        Feature(name="sulphur_dioxide_lag_3", dtype=Float32),
-        Feature(name="sulphur_dioxide_lag_6", dtype=Float32),
-        Feature(name="sulphur_dioxide_lag_24", dtype=Float32),
+        Field(name="sulphur_dioxide_lag_1", dtype=Float64),
+        Field(name="sulphur_dioxide_lag_3", dtype=Float64),
+        Field(name="sulphur_dioxide_lag_6", dtype=Float64),
+        Field(name="sulphur_dioxide_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # OZONE LAGS
         # ----------------------------------------------------
 
-        Feature(name="ozone_lag_1", dtype=Float32),
-        Feature(name="ozone_lag_3", dtype=Float32),
-        Feature(name="ozone_lag_6", dtype=Float32),
-        Feature(name="ozone_lag_24", dtype=Float32),
+        Field(name="ozone_lag_1", dtype=Float64),
+        Field(name="ozone_lag_3", dtype=Float64),
+        Field(name="ozone_lag_6", dtype=Float64),
+        Field(name="ozone_lag_24", dtype=Float64),
 
         # ----------------------------------------------------
         # AQI ROLLING MEANS
         # ----------------------------------------------------
 
-        Feature(name="aqi_3h_mean", dtype=Float32),
-        Feature(name="aqi_6h_mean", dtype=Float32),
-        Feature(name="aqi_12h_mean", dtype=Float32),
-        Feature(name="aqi_24h_mean", dtype=Float32),
+        Field(name="aqi_3h_mean", dtype=Float64),
+        Field(name="aqi_6h_mean", dtype=Float64),
+        Field(name="aqi_12h_mean", dtype=Float64),
+        Field(name="aqi_24h_mean", dtype=Float64),
 
         # ----------------------------------------------------
         # PM2.5 ROLLING MEANS
         # ----------------------------------------------------
 
-        Feature(name="pm2_5_3h_mean", dtype=Float32),
-        Feature(name="pm2_5_6h_mean", dtype=Float32),
-        Feature(name="pm2_5_24h_mean", dtype=Float32),
+        Field(name="pm2_5_3h_mean", dtype=Float64),
+        Field(name="pm2_5_6h_mean", dtype=Float64),
+        Field(name="pm2_5_24h_mean", dtype=Float64),
 
         # ----------------------------------------------------
         # PM10 ROLLING MEANS
         # ----------------------------------------------------
 
-        Feature(name="pm10_3h_mean", dtype=Float32),
-        Feature(name="pm10_6h_mean", dtype=Float32),
-        Feature(name="pm10_24h_mean", dtype=Float32),
+        Field(name="pm10_3h_mean", dtype=Float64),
+        Field(name="pm10_6h_mean", dtype=Float64),
+        Field(name="pm10_24h_mean", dtype=Float64),
 
         # ----------------------------------------------------
         # OTHER POLLUTANT ROLLING MEANS
         # ----------------------------------------------------
 
-        Feature(name="carbon_monoxide_24h_mean", dtype=Float32),
-        Feature(name="nitrogen_dioxide_24h_mean", dtype=Float32),
-        Feature(name="sulphur_dioxide_24h_mean", dtype=Float32),
-        Feature(name="ozone_24h_mean", dtype=Float32),
+        Field(name="carbon_monoxide_24h_mean", dtype=Float64),
+        Field(name="nitrogen_dioxide_24h_mean", dtype=Float64),
+        Field(name="sulphur_dioxide_24h_mean", dtype=Float64),
+        Field(name="ozone_24h_mean", dtype=Float64),
 
         # ----------------------------------------------------
         # AQI CHANGES
         # ----------------------------------------------------
 
-        Feature(name="aqi_change_1h", dtype=Float32),
-        Feature(name="aqi_change_3h", dtype=Float32),
-        Feature(name="aqi_change_6h", dtype=Float32),
-        Feature(name="aqi_change_24h", dtype=Float32),
+        Field(name="aqi_change_1h", dtype=Float64),
+        Field(name="aqi_change_3h", dtype=Float64),
+        Field(name="aqi_change_6h", dtype=Float64),
+        Field(name="aqi_change_24h", dtype=Float64),
 
         # ----------------------------------------------------
         # PM2.5 CHANGES
         # ----------------------------------------------------
 
-        Feature(name="pm2_5_change_1h", dtype=Float32),
-        Feature(name="pm2_5_change_24h", dtype=Float32),
+        Field(name="pm2_5_change_1h", dtype=Float64),
+        Field(name="pm2_5_change_24h", dtype=Float64),
 
         # ----------------------------------------------------
         # PM10 CHANGES
         # ----------------------------------------------------
 
-        Feature(name="pm10_change_1h", dtype=Float32),
-        Feature(name="pm10_change_24h", dtype=Float32),
+        Field(name="pm10_change_1h", dtype=Float64),
+        Field(name="pm10_change_24h", dtype=Float64),
 
         # ----------------------------------------------------
         # RECURSIVE AQI STATE
         # NOT A MODEL INPUT
         # ----------------------------------------------------
 
-        Feature(name="us_aqi", dtype=Float32),
+        Field(name="us_aqi", dtype=Float64),
 
         # ----------------------------------------------------
         # TRAINING TARGET
@@ -206,7 +215,7 @@ aqi_features = FeatureView(
         # NOT A PREDICTION CONTEXT FEATURE
         # ----------------------------------------------------
 
-        Feature(name="target_aqi", dtype=Float32),
+        Field(name="target_aqi", dtype=Float64),
     ],
 )
 
