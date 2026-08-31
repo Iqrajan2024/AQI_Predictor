@@ -31,7 +31,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow requests pytest "feast[duckdb]" duckdb
+          pip install pandas pyarrow requests pytest "feast[duckdb]==0.66.0" duckdb
 
       # ======================================================
       # RESTORE PREVIOUS PIPELINE STATE
@@ -194,6 +194,95 @@ jobs:
 
           echo "Feast local state reset."
           ls -la data || true    
+        
+
+      - name: Verify Feast source definitions
+        working-directory: feature_repo/feature_repo
+        run: |
+          echo "======================================"
+          echo "FEAST PYTHON FILES"
+          echo "======================================"
+
+          find . -maxdepth 2 -type f -name "*.py" -print
+
+          echo "======================================"
+          echo "FEATURE SERVICE DEFINITIONS"
+          echo "======================================"
+
+          grep -Rni "aqi_model_features" . --include="*.py" || true
+          grep -Rni "aqi_prediction_context" . --include="*.py" || true
+
+          echo "======================================"
+          echo "MODEL_FEATURES DEFINITIONS"
+          echo "======================================"
+
+          grep -Rni "MODEL_FEATURES" . --include="*.py" || true
+
+      - name: Debug Feast definitions
+        working-directory: feature_repo/feature_repo
+        run: |
+          echo "======================================"
+          echo "GIT COMMIT"
+          echo "======================================"
+          git rev-parse HEAD
+
+          echo "======================================"
+          echo "FEATURES.PY SERVICE DEFINITIONS"
+          echo "======================================"
+          grep -n -A8 -B5 "aqi_model_features = FeatureService" features.py
+          grep -n -A8 -B5 "aqi_prediction_context = FeatureService" features.py
+
+          echo "======================================"
+          echo "MODEL FEATURE COUNT FROM SOURCE"
+          echo "======================================"
+
+          python - <<'PY'
+          import features
+
+          print("features.py loaded from:")
+          print(features.__file__)
+
+          print()
+          print("MODEL_FEATURES =", len(features.MODEL_FEATURES))
+          print("MODEL_FEATURES unique =", len(set(features.MODEL_FEATURES)))
+          print("us_aqi in MODEL_FEATURES =", "us_aqi" in features.MODEL_FEATURES)
+          print("target_aqi in MODEL_FEATURES =", "target_aqi" in features.MODEL_FEATURES)
+
+          print()
+          print("PREDICTION_CONTEXT_FEATURES =", len(features.PREDICTION_CONTEXT_FEATURES))
+          print("us_aqi in CONTEXT =", "us_aqi" in features.PREDICTION_CONTEXT_FEATURES)
+          print("target_aqi in CONTEXT =", "target_aqi" in features.PREDICTION_CONTEXT_FEATURES)
+
+          print()
+          print("======================================")
+          print("FEATURE VIEW SCHEMA")
+          print("======================================")
+
+          print([
+              f.name
+              for f in features.aqi_features.schema
+          ])
+
+          print()
+          print("======================================")
+          print("FEATURE SERVICES FROM PYTHON MODULE")
+          print("======================================")
+
+          print("MODEL SERVICE:")
+          print([
+              f.name
+              for p in features.aqi_model_features.feature_view_projections
+              for f in p.features
+          ])
+
+          print()
+          print("CONTEXT SERVICE:")
+          print([
+              f.name
+              for p in features.aqi_prediction_context.feature_view_projections
+              for f in p.features
+          ])
+          PY
 
       # ======================================================
       # FEAST APPLY
