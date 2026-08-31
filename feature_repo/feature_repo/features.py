@@ -30,7 +30,7 @@ location_id = Entity(
 
 aqi_features_source = FileSource(
     name="aqi_features_source",
-    path=r"D:\Internship\pearls-aqi-predictor\data\processed\aqi_features.parquet",
+    path=r"../../data/processed/aqi_features.parquet",
     timestamp_field="timestamp",
 )
 
