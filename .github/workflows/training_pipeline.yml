@@ -111,6 +111,33 @@ jobs:
             -type f \
             -print
 
+      - name: Verify restored feature dataset
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          path = Path("data/processed/aqi_features.parquet")
+
+          assert path.exists(), f"Missing: {path}"
+
+          df = pd.read_parquet(path)
+
+          print("Feature dataset shape:", df.shape)
+          print("Columns:", len(df.columns))
+          print("First:", df["timestamp"].min())
+          print("Last:", df["timestamp"].max())
+
+          assert "location_id" in df.columns
+          assert "timestamp" in df.columns
+          assert "us_aqi" in df.columns
+          assert "target_aqi" in df.columns
+
+          assert not df.empty
+
+          print("FEATURE ARTIFACT RESTORE: PASS")
+          PY
+
       # ======================================================
       # 6. RESTORE FEATURE DATASET + FEAST STORE
       # ======================================================
