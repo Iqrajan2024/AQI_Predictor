@@ -249,7 +249,7 @@ jobs:
 
           PREVIOUS_RUN=$(gh run list \
             --repo "$REPO" \
-            --workflow "daily_training.yml" \
+            --workflow "training_pipeline.yml" \
             --branch main \
             --status success \
             --limit 2 \
