@@ -71,7 +71,6 @@ jobs:
           RUN_ID=$(gh run list \
             --repo "$REPO" \
             --workflow "feature_pipeline.yml" \
-            --branch main \
             --status success \
             --limit 1 \
             --json databaseId \
