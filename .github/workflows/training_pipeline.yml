@@ -87,7 +87,7 @@ jobs:
 
           echo "Latest feature run: $RUN_ID"
 
-            # ======================================================
+      # ======================================================
       # 5. DOWNLOAD FEATURE ARTIFACT
       # ======================================================
 
@@ -312,7 +312,37 @@ jobs:
             echo "No previous MLflow database found."
 
           fi
-                
+       
+      # ======================================================
+      # 10.5. CONFIGURE LOCAL MLFLOW
+      # ======================================================
+
+      - name: Configure MLflow local SQLite tracking
+        run: |
+
+          rm -f mlflow.db
+
+          if [ -d ".mlflow_restore" ] && \
+             [ -f ".mlflow_restore/mlflow.db" ]; then
+
+            cp \
+              ".mlflow_restore/mlflow.db" \
+              "mlflow.db"
+
+            echo "Previous MLflow database restored."
+
+          else
+
+            echo "No previous MLflow database found."
+            echo "A new MLflow database will be created."
+
+          fi
+
+          echo "MLFLOW_TRACKING_URI=sqlite:///$(pwd)/mlflow.db" \
+            >> "$GITHUB_ENV"
+
+          echo "MLflow tracking URI:"
+          echo "$MLFLOW_TRACKING_URI"
 
       # ======================================================
       # 11. TRAIN THROUGH FEAST

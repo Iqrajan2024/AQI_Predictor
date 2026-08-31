@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import joblib
+import os
 
 import mlflow
 import mlflow.sklearn
@@ -47,17 +48,23 @@ MODEL_DIR.mkdir(parents=True, exist_ok=True)
 # MLflow
 # ============================================================
 
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
-
 MODEL_NAME = "Pearls_AQI_XGBoost"
 MODEL_ALIAS = "champion"
 EXPERIMENT_NAME = "Pearls_AQI_Training"
 
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+DEFAULT_MLFLOW_DB = PROJECT_ROOT / "mlflow.db" 
+
+MLFLOW_TRACKING_URI = os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    f"sqlite:///{DEFAULT_MLFLOW_DB.as_posix()}", 
+) 
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI) 
+
+# Use the same backend for the Model Registry. 
 mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
 
 mlflow.set_experiment(EXPERIMENT_NAME)
-
 
 # ============================================================
 # FEAST
