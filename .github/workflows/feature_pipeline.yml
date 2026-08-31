@@ -581,7 +581,7 @@ jobs:
 
       - name: Run Feast tests
         run: |
-          pytest -q feature_repo/feature_repo/test_feature_store.py
+          pytest -q feature_repo/feature_repo/test_feast.py
 
       # ======================================================
       # SAVE PIPELINE STATE
