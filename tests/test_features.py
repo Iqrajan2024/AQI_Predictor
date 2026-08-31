@@ -161,14 +161,19 @@ def test_feature_values_have_no_missing_values():
 # ============================================================
 
 def test_target_has_no_missing_values():
-    """Verify that the prediction target contains no missing values."""
+    """Verify that all usable training rows have a target AQI."""
 
     df = pd.read_parquet(FEATURE_FILE)
 
     assert "target_aqi" in df.columns
 
-    assert df["target_aqi"].isna().sum() == 0
+    # target_aqi is the next-hour AQI, so the final row
+    # legitimately has no future observation.
+    assert df["target_aqi"].isna().sum() == 1
 
+    # Only the final row may be missing its target.
+    assert df["target_aqi"].iloc[:-1].notna().all()
+    assert pd.isna(df["target_aqi"].iloc[-1])
 
 # ============================================================
 # TEST 5 — TIMESTAMP ORDER
