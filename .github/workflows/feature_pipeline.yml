@@ -93,17 +93,8 @@ jobs:
               "data/processed/aqi_features.parquet"
           fi
 
-          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/registry.db" ]; then
-            cp \
-              ".pipeline_restore/feature_repo/feature_repo/data/registry.db" \
-              "feature_repo/feature_repo/data/registry.db"
-          fi
 
-          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" ]; then
-            cp \
-              ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" \
-              "feature_repo/feature_repo/data/online_store.db"
-          fi
+         
 
       # ======================================================
       # UPDATE RAW
@@ -189,6 +180,20 @@ jobs:
           print("Last:", df["timestamp"].max())
           print("Missing:", df.isna().sum().sum())
           PY
+      
+
+      # ======================================================
+      # RESET FEAST LOCAL INFRASTRUCTURE
+      # ======================================================
+
+      - name: Reset Feast local state
+        working-directory: feature_repo/feature_repo
+        run: |
+          rm -f data/registry.db
+          rm -f data/online_store.db
+
+          echo "Feast local state reset."
+          ls -la data || true    
 
       # ======================================================
       # FEAST APPLY
@@ -374,8 +379,7 @@ jobs:
           path: |
             data/raw/peshawar_openmeteo_2024_2026.csv
             data/processed/aqi_features.parquet
-            feature_repo/feature_repo/data/registry.db
-            feature_repo/feature_repo/data/online_store.db
+            
           retention-days: 7
           overwrite: true
           if-no-files-found: error

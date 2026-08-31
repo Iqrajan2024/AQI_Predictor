@@ -11,8 +11,9 @@ from feast import (
 from feast.types import (
     Int32,
     Float64,
-    String,
 )
+
+from feast.value_type import ValueType
 
 # ============================================================
 # ENTITY
@@ -20,6 +21,7 @@ from feast.types import (
 
 location_id = Entity(
     name="location_id",
+    value_type= ValueType.STRING,
     description="Single AQI monitoring location",
 )
 
