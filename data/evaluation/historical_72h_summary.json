@@ -1,0 +1,52 @@
+{
+  "evaluation_type": "historical_72_hour_recursive",
+  "number_of_origins": 750,
+  "origin_frequency_hours": 24,
+  "history_hours": 96,
+  "forecast_horizon_hours": 72,
+  "model": "Pearls_AQI_XGBoost",
+  "feature_count": 70,
+  "persistence_type": "fixed_origin_72_hour",
+  "overall": {
+    "xgb_rmse": 6.608112241609622,
+    "xgb_mae": 3.0598096797377976,
+    "persistence_rmse": 25.921829425037515,
+    "persistence_mae": 17.696685185185185,
+    "rmse_improvement_percent": 74.50753905807689,
+    "mae_improvement_percent": 82.70970157564128
+  },
+  "daily": [
+    {
+      "day": 1,
+      "lead_hours": "1-24",
+      "xgb_rmse": 6.600818847183082,
+      "xgb_mae": 3.0511078334384494,
+      "persistence_rmse": 20.545940393826385,
+      "persistence_mae": 11.928888888888888,
+      "rmse_improvement_percent": 67.87288038095114,
+      "mae_improvement_percent": 74.42253120254654
+    },
+    {
+      "day": 2,
+      "lead_hours": "25-48",
+      "xgb_rmse": 6.60642539319155,
+      "xgb_mae": 3.060474661509196,
+      "persistence_rmse": 27.068374330367327,
+      "persistence_mae": 19.576444444444444,
+      "rmse_improvement_percent": 75.59356423640126,
+      "mae_improvement_percent": 84.36654485346178
+    },
+    {
+      "day": 3,
+      "lead_hours": "49-72",
+      "xgb_rmse": 6.617082156358596,
+      "xgb_mae": 3.067846544265747,
+      "persistence_rmse": 29.342650982259027,
+      "persistence_mae": 21.584722222222222,
+      "rmse_improvement_percent": 77.44892865897026,
+      "mae_improvement_percent": 85.7869537875855
+    }
+  ],
+  "oracle_exogenous": true,
+  "oracle_exogenous_note": "Historical evaluation uses actual future weather and pollutant values available in the historical feature dataset. These future exogenous values may not represent the forecasts that would have been available operationally at each historical forecast origin."
+}

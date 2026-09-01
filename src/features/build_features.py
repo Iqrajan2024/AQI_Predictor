@@ -144,6 +144,10 @@ FEATURE_COLUMNS = [
     "pm10_change_24h",
 ]
 
+assert len(FEATURE_COLUMNS) == 70
+assert len(set(FEATURE_COLUMNS)) == 70
+assert "target_aqi" not in FEATURE_COLUMNS
+assert "us_aqi" not in FEATURE_COLUMNS
 
 # ============================================================
 # MAIN PIPELINE
@@ -212,6 +216,46 @@ def main():
         )
         .reset_index(drop=True)
     )
+
+    # --------------------------------------------------------
+    # HOURLY CONTINUITY CHECK
+    # --------------------------------------------------------
+
+    timestamp_diff = (
+        df["timestamp"]
+        .diff()
+        .dropna()
+    )
+
+    expected_interval = pd.Timedelta(hours=1)
+
+    gaps = timestamp_diff[
+        timestamp_diff != expected_interval
+    ]
+
+    if not gaps.empty:
+        gap_positions = gaps.index.tolist()
+
+        print("\n" + "=" * 60)
+        print("HOURLY CONTINUITY CHECK FAILED")
+        print("=" * 60)
+
+        for idx in gap_positions[:10]:
+            previous_timestamp = df.loc[idx - 1, "timestamp"]
+            current_timestamp = df.loc[idx, "timestamp"]
+
+            print(
+                f"Gap detected: "
+                f"{previous_timestamp} → {current_timestamp}"
+            )
+
+        raise ValueError(
+            f"Raw dataset contains {len(gaps)} non-hourly gaps. "
+            "Lag and rolling features require a continuous "
+            "hourly time series."
+        )
+
+    print("✓ Raw dataset has continuous hourly timestamps")
 
     # --------------------------------------------------------
     # REQUIRED BASE COLUMNS
@@ -596,8 +640,9 @@ def main():
 
     print("✓ 70 features")
     print("✓ No missing feature values")
-    print("✓ No missing target values")
+    print("✓ Target validation passed")
     print("✓ Chronologically ordered")
+    print("✓ Continuous hourly timestamps")
 
     df["location_id"] = "peshawar"
     

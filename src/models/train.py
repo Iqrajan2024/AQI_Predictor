@@ -621,7 +621,73 @@ def calculate_metrics(
         "mae": mae,
         "r2": r2,
     }
+# ============================================================
+# PERSISTENCE BASELINE
+# ============================================================
 
+def calculate_persistence_baseline(
+    y_train,
+    y_test,
+):
+    """
+    Persistence baseline:
+    predict the next AQI using the most recently observed AQI.
+
+    For the test period, the baseline starts with the last
+    observed AQI from the training period and then updates
+    using the previous actual AQI at each test timestep.
+    """
+
+    print("=" * 70)
+    print("PERSISTENCE BASELINE")
+    print("=" * 70)
+
+    # First prediction uses the final observed training AQI.
+    previous_aqi = float(
+        y_train.iloc[-1]
+    )
+
+    persistence_predictions = []
+
+    for actual_aqi in y_test:
+
+        # Predict current AQI using previous observed AQI.
+        persistence_predictions.append(
+            previous_aqi
+        )
+
+        # After the prediction, the actual value becomes
+        # available and is used for the next prediction.
+        previous_aqi = float(actual_aqi)
+
+    persistence_predictions = np.array(
+        persistence_predictions
+    )
+
+    metrics = calculate_metrics(
+        y_test,
+        persistence_predictions,
+    )
+
+    print(
+        f"Persistence Test RMSE: "
+        f"{metrics['rmse']:.4f}"
+    )
+
+    print(
+        f"Persistence Test MAE:  "
+        f"{metrics['mae']:.4f}"
+    )
+
+    print(
+        f"Persistence Test R²:   "
+        f"{metrics['r2']:.4f}"
+    )
+
+    return (
+        metrics,
+        persistence_predictions,
+    )
 
 # ============================================================
 # MODELS
@@ -719,6 +785,18 @@ def train():
         X,
         y,
         timestamps,
+    )
+
+    # --------------------------------------------------------
+    # PERSISTENCE BASELINE
+    # --------------------------------------------------------
+
+    (
+        persistence_metrics,
+        persistence_predictions,
+    ) = calculate_persistence_baseline(
+        y_train,
+        y_test,
     )
 
     # --------------------------------------------------------
@@ -959,10 +1037,123 @@ def train():
         winner_name
     ]
 
+    # ========================================================
+    # LOG PERSISTENCE BASELINE TO WINNING RUN
+    # ========================================================
+
+    with mlflow.start_run(
+        run_id=winner_run_id
+    ):
+
+        mlflow.log_metrics(
+            {
+                "persistence_test_rmse":
+                    persistence_rmse,
+
+                "persistence_test_mae":
+                    persistence_mae,
+
+                "persistence_test_r2":
+                    persistence_r2,
+
+                "rmse_improvement_vs_persistence_pct":
+                    rmse_improvement,
+
+                "mae_improvement_vs_persistence_pct":
+                    mae_improvement,
+            }
+        )
+
     print(
         "\nWINNER:",
         winner_name,
     )
+
+    # ========================================================
+    # CHAMPION VS PERSISTENCE BASELINE
+    # ========================================================
+
+    champion_test_rmse = float(
+        winner["test_rmse"]
+    )
+
+    champion_test_mae = float(
+        winner["test_mae"]
+    )
+
+    champion_test_r2 = float(
+        winner["test_r2"]
+    )
+
+    persistence_rmse = persistence_metrics[
+        "rmse"
+    ]
+
+    persistence_mae = persistence_metrics[
+        "mae"
+    ]
+
+    persistence_r2 = persistence_metrics[
+        "r2"
+    ]
+
+    rmse_improvement = (
+        (
+            persistence_rmse
+            - champion_test_rmse
+        )
+        / persistence_rmse
+    ) * 100
+
+    mae_improvement = (
+        (
+            persistence_mae
+            - champion_test_mae
+        )
+        / persistence_mae
+    ) * 100
+
+    print("\n" + "=" * 70)
+    print("CHAMPION VS PERSISTENCE BASELINE")
+    print("=" * 70)
+
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "model": "Persistence",
+                "RMSE": persistence_rmse,
+                "MAE": persistence_mae,
+                "R2": persistence_r2,
+            },
+            {
+                "model": f"Champion {winner_name}",
+                "RMSE": champion_test_rmse,
+                "MAE": champion_test_mae,
+                "R2": champion_test_r2,
+            },
+        ]
+    )
+
+    print(
+        comparison_df.to_string(
+            index=False,
+            float_format=lambda x: f"{x:.4f}",
+        )
+    )
+
+    print("\n" + "-" * 70)
+
+    print(
+        f"RMSE improvement: "
+        f"{rmse_improvement:.2f}%"
+    )
+
+    print(
+        f"MAE improvement:  "
+        f"{mae_improvement:.2f}%"
+    )
+
+    print("-" * 70)
 
     # ========================================================
     # REGISTER WINNER

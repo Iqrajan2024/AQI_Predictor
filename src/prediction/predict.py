@@ -2776,12 +2776,157 @@ def generate_forecast(
         "✓ target_aqi never passed to MLflow"
     )
 
+    # ========================================================
+    # 72-HOUR PERSISTENCE BASELINE
+    # ========================================================
+
+    hourly_forecast = add_persistence_baseline(
+        hourly_forecast=hourly_forecast,
+        feast_history=feast_history,
+    )
+
+    # ========================================================
+    # DAILY PERSISTENCE AVERAGES
+    # ========================================================
+
+    daily_persistence = (
+        hourly_forecast
+        .groupby(
+            "forecast_day",
+            as_index=False,
+        )
+        .agg(
+            persistence_aqi=(
+                "persistence_aqi",
+                "mean",
+            )
+        )
+    )
+
+    daily_forecast = daily_forecast.merge(
+        daily_persistence,
+        on="forecast_day",
+        how="left",
+    )
+
+    if len(daily_forecast) != 3:
+        raise ValueError(
+            "Persistence daily forecast must "
+            "contain exactly 3 days."
+        )
+
+    if hourly_forecast[
+        "persistence_aqi"
+    ].isna().any():
+
+        raise ValueError(
+            "Persistence forecast contains "
+            "missing values."
+        )
+
+    print()
+    print(
+        "✓ 72-hour persistence baseline"
+    )
+
+    print(
+        "✓ 3 daily persistence averages"
+    )
+
     return (
         hourly_forecast,
         daily_forecast,
         feature_df,
     )
 
+# ============================================================
+# 72-HOUR PERSISTENCE BASELINE
+# ============================================================
+
+def add_persistence_baseline(
+    hourly_forecast,
+    feast_history,
+):
+    """
+    Create a fixed-origin 72-hour persistence forecast.
+
+    Persistence assumption:
+        Every future hour = last observed AQI
+        at the forecast origin.
+
+    IMPORTANT:
+        Future actual AQI is NOT used.
+    """
+
+    hourly_forecast = hourly_forecast.copy()
+
+    feast_history = feast_history.copy()
+
+    feast_history["event_timestamp"] = (
+        pd.to_datetime(
+            feast_history["event_timestamp"],
+            utc=True,
+        ).dt.floor("h")
+    )
+
+    feast_history = (
+        feast_history
+        .sort_values("event_timestamp")
+        .reset_index(drop=True)
+    )
+
+    if feast_history.empty:
+        raise ValueError(
+            "Cannot create persistence baseline: "
+            "Feast history is empty."
+        )
+
+    last_observed_aqi = float(
+        feast_history.iloc[-1]["us_aqi"]
+    )
+
+    if not np.isfinite(last_observed_aqi):
+        raise ValueError(
+            "Last observed AQI for persistence "
+            "baseline is not finite."
+        )
+
+    hourly_forecast[
+        "persistence_aqi"
+    ] = last_observed_aqi
+
+    if len(hourly_forecast) != 72:
+        raise ValueError(
+            "Persistence baseline must contain "
+            f"72 rows. Received {len(hourly_forecast)}."
+        )
+
+    print()
+    print("=" * 70)
+    print("72-HOUR PERSISTENCE BASELINE")
+    print("=" * 70)
+
+    print(
+        "Persistence origin:",
+        feast_history.iloc[-1]["event_timestamp"],
+    )
+
+    print(
+        "Last observed AQI:",
+        f"{last_observed_aqi:.4f}",
+    )
+
+    print(
+        "Persistence forecast:",
+        f"{last_observed_aqi:.4f}",
+        "for all 72 hours",
+    )
+
+    print(
+        "✓ Fixed-origin 72-hour persistence baseline created"
+    )
+
+    return hourly_forecast
 
 # ============================================================
 # SAVE OUTPUTS
@@ -2813,6 +2958,7 @@ def save_outputs(
                 "timestamp",
                 "forecast_day",
                 "predicted_aqi",
+                "persistence_aqi",
             ]
         ]
         .copy()
@@ -2831,6 +2977,7 @@ def save_outputs(
         [
             "forecast_day",
             "predicted_aqi",
+            "persistence_aqi"
         ]
     ].to_csv(
         DAILY_PREDICTION_FILE,
@@ -2868,12 +3015,26 @@ def save_outputs(
             "Saved hourly forecast does not "
             "contain 72 rows."
         )
+    
+    if "persistence_aqi" not in hourly_check.columns:
+
+        raise ValueError(
+            "Saved hourly forecast does not "
+            "contain persistence_aqi."
+        )
 
     if len(daily_check) != 3:
 
         raise ValueError(
             "Saved daily forecast does not "
             "contain 3 rows."
+        )
+
+    if "persistence_aqi" not in daily_check.columns:
+
+        raise ValueError(
+            "Saved daily forecast does not "
+            "contain persistence_aqi."
         )
 
     if len(feature_check) != 72:
@@ -3137,6 +3298,7 @@ def main():
         forecast_end=forecast_end,
     )
 
+    
     # ========================================================
     # SAVE
     # ========================================================
@@ -3181,10 +3343,21 @@ def main():
         len(daily_forecast),
     )
 
-    print()
-    print("DAILY AQI")
     print(
-        daily_forecast.to_string(
+        "Persistence baseline:",
+        "72-hour fixed-origin",
+    )
+
+    print()
+    print("DAILY AQI COMPARISON")
+    print(
+        daily_forecast[
+            [
+                "forecast_day",
+                "predicted_aqi",
+                "persistence_aqi",
+            ]
+        ].to_string(
             index=False
         )
     )
@@ -3216,6 +3389,22 @@ def main():
     assert len(
         daily_forecast
     ) == 3
+
+    assert (
+        "persistence_aqi"
+        in forecast_df.columns
+    )
+
+    assert (
+        "persistence_aqi"
+        in daily_forecast.columns
+    )
+
+    assert (
+        forecast_df["persistence_aqi"]
+        .notna()
+        .all()
+    )
 
     assert len(
         feature_df

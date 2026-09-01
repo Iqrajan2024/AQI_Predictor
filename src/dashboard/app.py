@@ -42,6 +42,19 @@ st.set_page_config(
 
 DEFAULT_API_URL = "http://127.0.0.1:8000"
 
+EVALUATION_SUMMARY_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "evaluation"
+    / "historical_72h_summary.json"
+)
+
+EVALUATION_DAILY_METRICS_FILE = (
+    Path(__file__).resolve().parents[2]
+    / "data"
+    / "evaluation"
+    / "historical_72h_daily_metrics.csv"
+)
 
 # ============================================================
 # CSS
@@ -61,6 +74,13 @@ st.markdown(
                 opacity: 0.70;
                 font-size: 1rem;
                 margin-bottom: 1.5rem;
+            }
+
+            /* Smaller RMSE metric values ONLY inside forecast cards */
+            .st-key-forecast_card_1 [data-testid="stMetricValue"],
+            .st-key-forecast_card_2 [data-testid="stMetricValue"],
+            .st-key-forecast_card_3 [data-testid="stMetricValue"] {
+                font-size: 1.25rem !important;
             }
 
             .aqi-card {
@@ -156,6 +176,77 @@ def api_get(endpoint: str, timeout: int = 45) -> Any:
         raise RuntimeError(
             f"FastAPI returned invalid JSON from {url}."
         ) from exc
+
+
+def get_daily_rmse_vs_persistence() -> dict[int, float]:
+    """
+    Load day-by-day RMSE improvement versus persistence
+    from the historical 72-hour evaluation CSV.
+
+    Returns:
+        {
+            1: Day 1 improvement percentage,
+            2: Day 2 improvement percentage,
+            3: Day 3 improvement percentage,
+        }
+
+    Positive = champion model has lower/better RMSE
+    than persistence.
+    """
+
+    try:
+
+        if not EVALUATION_DAILY_METRICS_FILE.exists():
+            return {}
+
+        daily_df = pd.read_csv(
+            EVALUATION_DAILY_METRICS_FILE
+        )
+
+        if daily_df.empty:
+            return {}
+
+        results = {}
+
+        for _, row in daily_df.iterrows():
+
+            lead_hours = str(
+                row.get("lead_hours", "")
+            ).strip()
+
+            improvement = row.get(
+                "rmse_improvement_percent"
+            )
+
+            if pd.isna(improvement):
+                continue
+
+            # Map lead-hour ranges to forecast days.
+            if lead_hours == "1-24":
+                day_number = 1
+
+            elif lead_hours == "25-48":
+                day_number = 2
+
+            elif lead_hours == "49-72":
+                day_number = 3
+
+            else:
+                continue
+
+            results[day_number] = float(
+                improvement
+            )
+
+        return results
+
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        KeyError,
+    ):
+        return {}
 
 
 @st.cache_data(ttl=0, show_spinner=False)
@@ -589,9 +680,7 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
                     "health_alert",
                     {},
                 ),
-                "model_rmse": record.get(
-                    "model_rmse",
-                ),
+                
             }
         )
 
@@ -808,6 +897,10 @@ st.divider()
 
 st.subheader("Next 3-Day AQI Forecast for Peshawar")
 
+daily_rmse_vs_persistence = (
+    get_daily_rmse_vs_persistence()
+)
+
 forecast_days = normalize_forecast_days(forecast)
 
 if not forecast_days:
@@ -848,9 +941,6 @@ else:
                     item.get("category")
                     or "Unknown"
                 )
-
-
-                rmse = item.get("model_rmse")
 
                 health_alert = item.get("health_alert") or {}
                 alert_active = bool(health_alert.get("alert", False))
@@ -927,16 +1017,39 @@ else:
                     unsafe_allow_html=True,
                 )
 
-            
-
                 # ------------------------------------------------
-                # RMSE
+                # RMSE VS PERSISTENCE
                 # ------------------------------------------------
 
-                st.caption(
-                    f"Prediction error (RMSE): "
-                    f"{format_number(rmse, 3)}"
+                day_number = item["day_number"]
+
+                rmse_vs_persistence = (
+                    daily_rmse_vs_persistence.get(day_number)
                 )
+
+                if rmse_vs_persistence is None:
+
+                    st.metric(
+                        label="Champion RMSE vs Persistence",
+                        value="N/A",
+                        delta=None,
+                        border=True,
+                    )
+
+                else:
+
+                    st.metric(
+                        label="Champion RMSE vs Persistence",
+                        value=f"{rmse_vs_persistence:+.2f}%",
+                        delta=None,
+                        border=True,
+                        help=(
+                            "Percentage improvement in RMSE compared with "
+                            "the fixed-origin persistence forecast for this "
+                            "forecast day. Positive means the champion model "
+                            "has lower RMSE."
+                        ),
+                    )
 
                 # ------------------------------------------------
                 # HEALTH ALERT
@@ -1499,7 +1612,6 @@ else:
 st.divider()
 
 st.caption(
-    f"Pearls AQI Predictor • FastAPI backend: "
-    f"{st.session_state.api_url} • "
+    f"Pearls AQI Predictor - Peshawar • FastAPI backend: "
     f"Dashboard generated {datetime.now().strftime('%d %b %Y %H:%M')}"
 )

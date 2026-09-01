@@ -2,13 +2,17 @@ name: Pearls AQI - Hourly Feature Pipeline
 
 on:
   schedule:
-    - cron: "15 * * * *"
+    - cron: "37 * * * *"
 
   workflow_dispatch:
 
 permissions:
   contents: read
   actions: read
+
+concurrency:
+  group: aqi-hourly-feature-pipeline
+  cancel-in-progress: false
 
 jobs:
 
@@ -71,7 +75,7 @@ jobs:
           find .pipeline_restore -type f -print
 
       # ======================================================
-      # RESTORE DATA
+      # RESTORE PIPELINE FILES
       # ======================================================
 
       - name: Restore pipeline files
@@ -93,9 +97,25 @@ jobs:
               "data/processed/aqi_features.parquet"
           fi
 
+          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/registry.db" ]; then
+            cp \
+              ".pipeline_restore/feature_repo/feature_repo/data/registry.db" \
+              "feature_repo/feature_repo/data/registry.db"
+          fi
 
-         
+          if [ -f ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" ]; then
+            cp \
+              ".pipeline_restore/feature_repo/feature_repo/data/online_store.db" \
+              "feature_repo/feature_repo/data/online_store.db"
+          fi
 
+          echo "======================================"
+          echo "RESTORED PIPELINE STATE"
+          echo "======================================"
+
+          find data -maxdepth 3 -type f -print
+          find feature_repo/feature_repo/data -maxdepth 1 -type f -print
+      
       # ======================================================
       # UPDATE RAW
       # ======================================================
@@ -183,18 +203,8 @@ jobs:
       
 
       # ======================================================
-      # RESET FEAST LOCAL INFRASTRUCTURE
+      # FEAST LOCAL INFRASTRUCTURE
       # ======================================================
-
-      - name: Reset Feast local state
-        working-directory: feature_repo/feature_repo
-        run: |
-          rm -f data/registry.db
-          rm -f data/online_store.db
-
-          echo "Feast local state reset."
-          ls -la data || true    
-        
 
       - name: Verify Feast source definitions
         working-directory: feature_repo/feature_repo
@@ -283,7 +293,35 @@ jobs:
               for f in p.features
           ])
           PY
+      
+      # ======================================================
+      # VERIFY FEAST STATE
+      # ======================================================
 
+      - name: Verify Feast state
+        working-directory: feature_repo/feature_repo
+        run: |
+
+          echo "======================================"
+          echo "FEAST STATE"
+          echo "======================================"
+
+          if [ -f "data/registry.db" ]; then
+            echo "✓ registry.db restored"
+            ls -lh data/registry.db
+          else
+            echo "No previous registry.db found."
+            echo "This is the first Feast run."
+          fi
+
+          if [ -f "data/online_store.db" ]; then
+            echo "✓ online_store.db restored"
+            ls -lh data/online_store.db
+          else
+            echo "No previous online_store.db found."
+            echo "Online store will be created."
+          fi
+        
       # ======================================================
       # FEAST APPLY
       # ======================================================
@@ -594,7 +632,8 @@ jobs:
           path: |
             data/raw/peshawar_openmeteo_2024_2026.csv
             data/processed/aqi_features.parquet
-            
+            feature_repo/feature_repo/data/registry.db
+            feature_repo/feature_repo/data/online_store.db
           retention-days: 7
           overwrite: true
           if-no-files-found: error
