@@ -572,7 +572,7 @@ def build_line_chart(
     thresholds = [
         (50, "Good"),
         (100, "Moderate"),
-        (150, "USG"),
+        (150, "Unhealthy for Sensitive Groups"),
         (200, "Unhealthy"),
         (300, "Very Unhealthy"),
     ]
@@ -697,7 +697,6 @@ with st.sidebar:
     api_url = st.text_input(
         "FastAPI URL",
         value=st.session_state.api_url,
-        help="FastAPI backend, normally http://127.0.0.1:8000",
     ).rstrip("/")
 
     st.session_state.api_url = api_url
@@ -1054,16 +1053,46 @@ else:
                 # ------------------------------------------------
                 # HEALTH ALERT
                 # ------------------------------------------------
+                
+                category_lower = str(category).strip().lower()
 
-                if alert_active:
+                if alert_message or alert_recommendation:
 
-                    st.warning(
+                    if category_lower == "good":
+                        alert_function = st.success
+
+                    elif category_lower == "moderate":
+                        alert_function = st.warning
+
+                    elif "sensitive" in category_lower:
+                        alert_function = st.warning
+
+                    elif category_lower == "unhealthy":
+                        alert_function = st.error
+
+                    elif "very unhealthy" in category_lower:
+                        alert_function = st.error
+
+                    elif "hazardous" in category_lower:
+                        alert_function = st.error
+
+                    else:
+                        alert_function = st.info
+
+                    message = (
                         f"**{alert_level} — Health Alert**\n\n"
-                        f"{alert_message}\n\n"
-                        f"**Recommendation:** {alert_recommendation}"
+                        f"{alert_message}"
                     )
 
+                    if alert_recommendation:
+                        message += (
+                            f"\n\n**Recommendation:** "
+                            f"{alert_recommendation}"
+                        )
 
+                    alert_function(message)
+                            
+                            
 # ============================================================
 # 72-HOUR FORECAST TREND
 # ============================================================
@@ -1479,7 +1508,7 @@ else:
 
                 if strongest_value > 0:
 
-                    st.info(
+                    st.error(
                         f"**What this means:** "
                         f"{strongest_name} was one of the strongest factors "
                         f"pushing the predicted AQI higher on "

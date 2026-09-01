@@ -55,7 +55,7 @@ aqi_features_source = FileSource(
 aqi_features = FeatureView(
     name="aqi_features",
     entities=[location_id],
-    ttl=timedelta(days=30),
+    ttl=timedelta(days=7),
     online=True,
     source=aqi_features_source,
 

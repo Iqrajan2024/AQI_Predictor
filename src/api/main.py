@@ -300,7 +300,8 @@ def get_aqi_health_alert(aqi: float) -> dict:
             ),
             "recommendation": (
                 "Unusually sensitive individuals should "
-                "consider reducing prolonged outdoor exertion."
+                "consider reducing prolonged or heavy outdoor activity if they notice "
+                "symptoms."
             ),
         }
 
@@ -309,7 +310,7 @@ def get_aqi_health_alert(aqi: float) -> dict:
             "alert": True,
             "level": "Unhealthy for Sensitive Groups",
             "message": (
-                "Members of sensitive groups may "
+                "Sensitive groups may "
                 "experience health effects."
             ),
             "recommendation": (
@@ -327,9 +328,7 @@ def get_aqi_health_alert(aqi: float) -> dict:
                 "health effects."
             ),
             "recommendation": (
-                "Sensitive groups should avoid prolonged "
-                "or heavy outdoor exertion. Others should "
-                "consider reducing prolonged or heavy exertion."
+                "Consider reducing prolonged or heavy exertion."
             ),
         }
 
@@ -338,12 +337,13 @@ def get_aqi_health_alert(aqi: float) -> dict:
             "alert": True,
             "level": "Very Unhealthy",
             "message": (
-                "Health alert: everyone may experience "
+                "Everyone may experience "
                 "more serious health effects."
             ),
             "recommendation": (
-                "Everyone should avoid prolonged or "
-                "heavy outdoor exertion."
+                "Avoid prolonged or "
+                "heavy outdoor exertion and consider "
+                "limiting time outdoors."
             ),
         }
 
@@ -352,11 +352,11 @@ def get_aqi_health_alert(aqi: float) -> dict:
         "level": "Hazardous",
         "message": (
             "Health warning: emergency conditions. "
-            "The entire population is more likely to be affected."
+            "The predicted air quality represents a serious health risk."
         ),
         "recommendation": (
-            "Everyone should avoid outdoor exertion "
-            "and reduce exposure to outdoor air pollution."
+            "Avoid outdoor exposure as much as possible  "
+            "and follow local health guidance."
         ),
     }
 
