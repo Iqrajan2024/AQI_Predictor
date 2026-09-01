@@ -39,6 +39,7 @@ Data sources:
 
 from pathlib import Path
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 import mlflow
@@ -99,6 +100,7 @@ LOCATION_ID = "peshawar"
 LATITUDE = 34.008
 LONGITUDE = 71.5785
 
+TIMEZONE = ZoneInfo("Asia/Karachi")
 
 # ============================================================
 # OPEN-METEO
@@ -496,13 +498,54 @@ def load_forecast_features():
             "does not contain timestamp."
         )
 
+    # --------------------------------------------------------
+    # Parse timestamps as UTC
+    # --------------------------------------------------------
+
     df["timestamp"] = pd.to_datetime(
         df["timestamp"],
         utc=True,
+        errors="coerce",
+    )
+
+    if df["timestamp"].isna().any():
+
+        raise ValueError(
+            "Invalid timestamp values found in "
+            "latest_forecast_features.csv."
+        )
+
+    # --------------------------------------------------------
+    # Sort chronologically
+    # --------------------------------------------------------
+
+    df = (
+        df
+        .sort_values("timestamp")
+        .drop_duplicates(
+            subset=["timestamp"]
+        )
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # Create LOCAL forecast day
+    #
+    # IMPORTANT:
+    # Dashboard dates are Asia/Karachi dates.
+    # --------------------------------------------------------
+
+    df["local_timestamp"] = (
+        df["timestamp"]
+        .dt.tz_convert(TIMEZONE)
+    )
+
+    df["forecast_day"] = (
+        df["local_timestamp"]
+        .dt.date
     )
 
     return df
-
 
 # ============================================================
 # CURRENT AIR QUALITY
@@ -889,9 +932,14 @@ def forecast_day(
                 "Use YYYY-MM-DD."
             ),
         )
+    
+    hourly["local_timestamp"] = (
+        hourly["timestamp"]
+        .dt.tz_convert(TIMEZONE)
+    )
 
     hourly["forecast_day"] = (
-        hourly["timestamp"]
+        hourly["local_timestamp"]
         .dt.date
     )
 
@@ -937,7 +985,7 @@ def forecast_day(
 
             {
                 "timestamp": (
-                    row["timestamp"]
+                    row["local_timestamp"]
                     .isoformat()
                 ),
 
@@ -1169,7 +1217,7 @@ def shap_day(
 ):
 
     # --------------------------------------------------------
-    # Validate date
+    # Validate requested date
     # --------------------------------------------------------
 
     try:
@@ -1196,9 +1244,7 @@ def shap_day(
 
     try:
 
-        features = (
-            load_forecast_features()
-        )
+        features = load_forecast_features()
 
     except Exception as exc:
 
@@ -1208,42 +1254,182 @@ def shap_day(
         )
 
     # --------------------------------------------------------
-    # Determine forecast day
+    # Make absolutely sure local forecast day exists
     # --------------------------------------------------------
 
-    features["forecast_day"] = (
-        features["timestamp"]
-        .dt.date
-    )
+    if "forecast_day" not in features.columns:
 
-    day_features = features[
-        features["forecast_day"]
-        == requested_date
-    ].copy()
+        features["local_timestamp"] = (
+            features["timestamp"]
+            .dt.tz_convert(TIMEZONE)
+        )
 
-    if day_features.empty:
-
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"No forecast features found "
-                f"for {forecast_day}."
-            ),
+        features["forecast_day"] = (
+            features["local_timestamp"]
+            .dt.date
         )
 
     # --------------------------------------------------------
-    # Validate 24 hours
+    # Select requested LOCAL calendar day
+    # --------------------------------------------------------
+
+    day_features = (
+        features[
+            features["forecast_day"]
+            == requested_date
+        ]
+        .copy()
+        .sort_values("timestamp")
+        .reset_index(drop=True)
+    )
+
+    # --------------------------------------------------------
+    # No data
+    # --------------------------------------------------------
+
+    if day_features.empty:
+
+        available_days = sorted(
+            features["forecast_day"]
+            .dropna()
+            .unique()
+            .tolist()
+        )
+
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "message": (
+                    f"No forecast features found "
+                    f"for {forecast_day}."
+                ),
+                "requested_date": str(
+                    requested_date
+                ),
+                "available_dates": [
+                    str(day)
+                    for day in available_days
+                ],
+            },
+        )
+
+    # --------------------------------------------------------
+    # EXACTLY 24 HOURS REQUIRED
     # --------------------------------------------------------
 
     if len(day_features) != 24:
 
+        local_times = (
+            day_features["local_timestamp"]
+            .dt.strftime(
+                "%Y-%m-%d %H:%M:%S %Z"
+            )
+            .tolist()
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": (
+                    f"Expected 24 forecast rows "
+                    f"for {forecast_day}, "
+                    f"found {len(day_features)}."
+                ),
+                "requested_date": str(
+                    requested_date
+                ),
+                "rows_found": len(
+                    day_features
+                ),
+                "timestamps": local_times,
+            },
+        )
+
+    # --------------------------------------------------------
+    # Validate hourly continuity
+    # --------------------------------------------------------
+
+    timestamp_diffs = (
+        day_features["timestamp"]
+        .diff()
+        .dropna()
+    )
+
+    expected_delta = pd.Timedelta(
+        hours=1
+    )
+
+    if not (
+        timestamp_diffs
+        == expected_delta
+    ).all():
+
         raise HTTPException(
             status_code=500,
             detail=(
-                f"Expected 24 forecast rows "
-                f"for {forecast_day}, "
-                f"found {len(day_features)}."
+                f"Forecast rows for {forecast_day} "
+                "are not hourly-continuous."
             ),
+        )
+
+    # --------------------------------------------------------
+    # Validate local-day boundaries
+    # --------------------------------------------------------
+
+    first_local = (
+        day_features.iloc[0]
+        ["local_timestamp"]
+    )
+
+    last_local = (
+        day_features.iloc[-1]
+        ["local_timestamp"]
+    )
+
+    expected_start = pd.Timestamp(
+        requested_date,
+        tz=TIMEZONE,
+    )
+
+    expected_end = (
+        expected_start
+        + pd.Timedelta(hours=23)
+    )
+
+    if first_local != expected_start:
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": (
+                    "Forecast day does not start "
+                    "at local midnight."
+                ),
+                "expected_start": (
+                    expected_start.isoformat()
+                ),
+                "actual_start": (
+                    first_local.isoformat()
+                ),
+            },
+        )
+
+    if last_local != expected_end:
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": (
+                    "Forecast day does not end "
+                    "at local 23:00."
+                ),
+                "expected_end": (
+                    expected_end.isoformat()
+                ),
+                "actual_end": (
+                    last_local.isoformat()
+                ),
+            },
         )
 
     # --------------------------------------------------------
@@ -1288,7 +1474,7 @@ def shap_day(
         )
 
     # --------------------------------------------------------
-    # Add timestamps
+    # Build response
     # --------------------------------------------------------
 
     results = []
@@ -1297,26 +1483,37 @@ def shap_day(
         explanations
     ):
 
-        timestamp = (
-            day_features.iloc[index][
-                "timestamp"
-            ]
+        row = day_features.iloc[index]
+
+        timestamp_utc = row["timestamp"]
+
+        timestamp_local = (
+            row["local_timestamp"]
         )
 
         results.append(
             {
-                "timestamp":
-                    timestamp.isoformat(),
+                "timestamp": (
+                    timestamp_local
+                    .isoformat()
+                ),
 
-                "base_value":
+                "timestamp_utc": (
+                    timestamp_utc
+                    .isoformat()
+                ),
+
+                "base_value": (
                     explanation[
                         "base_value"
-                    ],
+                    ]
+                ),
 
-                "features":
+                "features": (
                     explanation[
                         "features"
-                    ],
+                    ]
+                ),
             }
         )
 
@@ -1326,20 +1523,21 @@ def shap_day(
 
     return {
 
-        "date":
-            forecast_day,
+        "date": str(
+            requested_date
+        ),
 
-        "hours":
-            len(results),
+        "hours": len(
+            results
+        ),
 
-        "model":
-            "Pearls_AQI_XGBoost",
+        "model": (
+            "Pearls_AQI_XGBoost"
+        ),
 
-        "model_alias":
-            "champion",
+        "model_alias": "champion",
 
-        "explanations":
-            results,
+        "explanations": results,
     }
 
 
