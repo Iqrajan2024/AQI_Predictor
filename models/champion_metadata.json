@@ -2,8 +2,8 @@
   "model_name": "Pearls_AQI_XGBoost",
   "model_type": "xgboost",
   "mlflow_tracking_uri": "http://127.0.0.1:5000",
-  "mlflow_run_id": "502dc251b90045a59cfd1d72ed90fd03",
-  "mlflow_version": "3",
+  "mlflow_run_id": "7881483039964ce3935cc8e7a458cc03",
+  "mlflow_version": "4",
   "mlflow_alias": "champion",
   "feature_count": 70,
   "features": [
@@ -81,10 +81,10 @@
   "target": "target_aqi",
   "us_aqi_used_as_input": false,
   "feast_feature_service": "aqi_model_features",
-  "validation_rmse": 1.3033649602039001,
-  "validation_mae": 0.6221343851507916,
-  "validation_r2": 0.9980455775155409,
-  "test_rmse": 2.4326003453562515,
-  "test_mae": 1.2981376123992325,
-  "test_r2": 0.9941307578832983
+  "validation_rmse": 1.6417309072229755,
+  "validation_mae": 0.7831783413843213,
+  "validation_r2": 0.9963088736550689,
+  "test_rmse": 2.37644850360226,
+  "test_mae": 1.2731296250611697,
+  "test_r2": 0.9934402075493329
 }

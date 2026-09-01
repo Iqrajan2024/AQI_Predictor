@@ -1,4 +1,5 @@
 from datetime import timedelta
+from pathlib import Path
 
 from feast import (
     Entity,
@@ -14,6 +15,16 @@ from feast.types import (
 )
 
 from feast.value_type import ValueType
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+FEATURE_FILE = (
+    PROJECT_ROOT
+    / "data"
+    / "processed"
+    / "aqi_features.parquet"
+)
+
 
 # ============================================================
 # ENTITY
@@ -32,7 +43,7 @@ location_id = Entity(
 
 aqi_features_source = FileSource(
     name="aqi_features_source",
-    path=r"../../data/processed/aqi_features.parquet",
+    path=str(FEATURE_FILE),
     timestamp_field="timestamp",
 )
 
