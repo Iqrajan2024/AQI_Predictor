@@ -1479,41 +1479,26 @@ def shap_day(
 
     results = []
 
-    for index, explanation in enumerate(
-        explanations
-    ):
+    for index, explanation in enumerate(explanations):
 
-        row = day_features.iloc[index]
+        timestamp = day_features.iloc[index]["timestamp"]
 
-        timestamp_utc = row["timestamp"]
-
-        timestamp_local = (
-            row["local_timestamp"]
-        )
+        # Each forecast hour gets its OWN most influential feature
+        top_feature = explanation["features"][0]
 
         results.append(
             {
-                "timestamp": (
-                    timestamp_local
-                    .isoformat()
-                ),
+                "timestamp": timestamp.isoformat(),
 
-                "timestamp_utc": (
-                    timestamp_utc
-                    .isoformat()
-                ),
+                "base_value": explanation["base_value"],
 
-                "base_value": (
-                    explanation[
-                        "base_value"
-                    ]
-                ),
+                "top_feature": top_feature["feature"],
 
-                "features": (
-                    explanation[
-                        "features"
-                    ]
-                ),
+                "top_shap_value": top_feature["shap_value"],
+
+                "top_abs_shap_value": top_feature["abs_shap_value"],
+
+                "features": explanation["features"],
             }
         )
 

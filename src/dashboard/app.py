@@ -175,16 +175,106 @@ def get_dashboard_data(api_url: str) -> dict:
     }
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def get_shap_data(api_url: str, forecast_day: str) -> dict:
-    """Load SHAP explanations for one forecast day."""
-    base = api_url.rstrip("/")
-    response = requests.get(
-        f"{base}/shap/{forecast_day}",
-        timeout=90,
-    )
-    response.raise_for_status()
+@st.cache_data(ttl=0, show_spinner=False) 
+def get_shap_data(api_url: str, forecast_day: str) -> dict: 
+    """ Load fresh SHAP explanations for one forecast day. 
+    ttl=0 ensures that dashboard reruns do not keep an old 
+    SHAP response for the same date. """ 
+    base = api_url.rstrip("/") 
+    response = requests.get( 
+        f"{base}/shap/{forecast_day}", 
+        timeout=90, 
+    ) 
+    response.raise_for_status() 
     return response.json()
+
+# ============================================================ 
+# SHAP FEATURE AGGREGATION  
+# ============================================================
+def aggregate_daily_shap(explanations: list[dict]) -> pd.DataFrame:
+
+    """ Aggregate the 24 hourly SHAP explanations for one day. 
+    Each technical feature remains separate. 
+    mean_shap: 
+    Average signed SHAP contribution across the 24 hours. 
+    mean_abs_shap: Average magnitude of the SHAP contribution across 
+    the 24 hours. Used for importance ranking. 
+    """
+    rows = []
+
+    for explanation in explanations:
+        timestamp = explanation.get("timestamp")
+        for feature_data in explanation.get("features", []):
+            feature = feature_data.get("feature")
+
+            if not feature:
+                continue
+
+            try:
+                shap_value = float(
+                    feature_data.get(
+                        "shap_value",
+                        0.0,
+                    )
+                )
+            except (TypeError, ValueError):
+                continue
+
+            rows.append(
+                {
+                    "timestamp": timestamp,
+                    "feature": str(feature),
+                    "shap_value": shap_value,
+                }
+            )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "feature",
+                "mean_shap",
+                "mean_abs_shap",
+            ]
+        )
+
+    raw_df = pd.DataFrame(rows)
+
+    aggregate_df = (
+        raw_df
+        .groupby("feature", as_index=False)
+        .agg(
+            mean_shap=(
+                "shap_value",
+                "mean",
+            ),
+            mean_abs_shap=(
+                "shap_value",
+                lambda x: x.abs().mean(),
+            ),
+        )
+    )
+
+    return aggregate_df
+
+# ============================================================ 
+# SHAP EXPLANATION TEXT 
+# ============================================================ 
+
+def build_shap_explanation( 
+        aggregate_df: pd.DataFrame, 
+        forecast_date: str, 
+) -> tuple[str, str]: 
+    """ Build the natural-language explanation from the actual 
+    strongest SHAP contributors for this specific forecast day. 
+    
+    Returns: message_type, message 
+    """ 
+    if aggregate_df.empty: 
+        return ( 
+            "info",
+            f"No meaningful SHAP explanation is available " 
+            f"for {forecast_date}.", 
+        ) 
+
 
 
 def format_number(value: Any, decimals: int = 1) -> str:
@@ -995,87 +1085,17 @@ else:
                 # AGGREGATE ALL 24 HOURS
                 # ------------------------------------------------
 
-                aggregate = {}
-
-                for explanation in explanations:
-
-                    for feature in explanation.get(
-                        "features",
-                        [],
-                    ):
-
-                        name = feature.get(
-                            "feature"
-                        )
-
-                        value = float(
-                            feature.get(
-                                "shap_value",
-                                0.0,
-                            )
-                        )
-
-                        if name not in aggregate:
-                            aggregate[name] = []
-
-                        aggregate[name].append(value)
-
-                # ------------------------------------------------
-                # CALCULATE DAILY IMPORTANCE
-                # ------------------------------------------------
-
-                aggregate_rows = []
-
-                for feature, values in aggregate.items():
-
-                    values_series = pd.Series(
-                        values
-                    )
-
-                    mean_shap = float(
-                        values_series.mean()
-                    )
-
-                    mean_abs_shap = float(
-                        values_series.abs().mean()
-                    )
-
-                    aggregate_rows.append(
-                        {
-                            "feature": feature,
-                            "mean_shap": mean_shap,
-                            "mean_abs_shap": mean_abs_shap,
-                        }
-                    )
-
-                aggregate_df = pd.DataFrame(
-                    aggregate_rows
+                aggregate_df = aggregate_daily_shap(
+                    explanations
                 )
 
                 if aggregate_df.empty:
-
                     st.warning(
-                        "No meaningful explanation data "
-                        f"is available for {forecast_date}."
+                        "No meaningful SHAP feature contributions "
+                        f"are available for {forecast_date}."
                     )
 
                     continue
-
-                # ------------------------------------------------
-                # TOP 8 DAILY FACTORS
-                # ------------------------------------------------
-
-                aggregate_df = (
-                    aggregate_df
-                    .sort_values(
-                        "mean_abs_shap",
-                        ascending=False,
-                    )
-                    .head(8)
-                    .sort_values(
-                        "mean_shap"
-                    )
-                )
 
                 # ------------------------------------------------
                 # CONVERT TO USER-FRIENDLY NAMES
@@ -1088,6 +1108,23 @@ else:
                     )
                 )
 
+                # ==================================================== 
+                # TOP 8 FEATURES  
+                # ==================================================== 
+                
+                chart_df = ( 
+                    aggregate_df 
+                    .sort_values( 
+                        "mean_abs_shap", 
+                        ascending=False, 
+                    ) 
+                    .head(8) 
+                    .sort_values( 
+                        "mean_shap", 
+                        ascending=True, 
+                    ) .copy() 
+                )
+
                 # ------------------------------------------------
                 # DETERMINE BAR COLORS
                 # ------------------------------------------------
@@ -1098,7 +1135,7 @@ else:
                     warning
                     if value > 0
                     else primary
-                    for value in aggregate_df[
+                    for value in chart_df[
                         "mean_shap"
                     ]
                 ]
@@ -1111,14 +1148,22 @@ else:
 
                 fig.add_trace(
                     go.Bar(
-                        x=aggregate_df[
+                        x=chart_df[
                             "mean_shap"
                         ],
-                        y=aggregate_df[
+                        y=chart_df[
                             "friendly_name"
                         ],
                         orientation="h",
                         marker_color=colors,
+
+                        customdata=chart_df[
+                            [
+                                "feature",
+                                "mean_abs_shap",
+                            ]
+                        ].values,
+
                         hovertemplate=(
                             "<b>%{y}</b><br>"
                             "Influence: %{x:.2f}"
@@ -1156,58 +1201,269 @@ else:
                 st.plotly_chart(
                     fig,
                     width="stretch",
+                    key=f"shap_chart_{forecast_date}",
                 )
 
-                # ------------------------------------------------
-                # SIMPLE USER EXPLANATION
-                # ------------------------------------------------
-
-                strongest = (
-                    aggregate_df
-                    .sort_values(
-                        "mean_abs_shap",
-                        ascending=False,
-                    )
-                    .iloc[0]
+                # ====================================================  
+                # TOP POSITIVE CONTRIBUTORS  
+                # ==================================================== 
+                
+                positive_df = ( 
+                    aggregate_df[ 
+                        aggregate_df["mean_shap"] > 0 
+                    ] 
+                    .sort_values( 
+                        "mean_abs_shap", 
+                        ascending=False, 
+                    ) 
+                    .head(3) 
                 )
 
-                strongest_name = (
-                    friendly_feature_name(
-                        strongest["feature"]
+                # ====================================================  
+                # TOP NEGATIVE CONTRIBUTORS  
+                # ==================================================== 
+                
+                negative_df = ( 
+                    aggregate_df[ 
+                        aggregate_df["mean_shap"] < 0 
+                        ] 
+                        .sort_values( 
+                            "mean_abs_shap", 
+                            ascending=False, 
+                        ) 
+                        .head(3) 
                     )
+                
+                # ====================================================  
+                # DAILY EXPLANATION  
+                # ==================================================== 
+                
+                st.markdown( 
+                    "### What influenced this forecast?" 
+                ) 
+
+                explanation_col1, explanation_col2 = st.columns(2)
+
+                # ----------------------------------------------------  
+                # HIGHER AQI CONTRIBUTORS  
+                # ---------------------------------------------------- 
+                
+                with explanation_col1: 
+                    st.markdown( 
+                        "**🟠 Factors pushing AQI higher**" 
+                    ) 
+                    if positive_df.empty: 
+                        st.caption( 
+                            "No consistently positive " 
+                            "contributors were identified." 
+                        ) 
+                    else: 
+                        for _, row in positive_df.iterrows(): 
+                            feature_name = ( 
+                                friendly_feature_name( 
+                                    row["feature"] 
+                                ) 
+                            ) 
+
+                            st.markdown( 
+                                f"- **{feature_name}** " 
+                                f"({row['mean_shap']:+.2f})" 
+                            )
+
+                # ----------------------------------------------------  
+                # LOWER AQI CONTRIBUTORS  
+                # ---------------------------------------------------- 
+                
+                with explanation_col2: 
+                    st.markdown( 
+                        "**🔵 Factors pushing AQI lower**" 
+                    ) 
+
+                    if negative_df.empty: 
+                        st.caption( 
+                            "No consistently negative " 
+                            "contributors were identified." 
+                        ) 
+                    else: 
+                        for _, row in negative_df.iterrows(): 
+                            feature_name = ( 
+                                friendly_feature_name( 
+                                    row["feature"] 
+                                ) 
+                            ) 
+
+                            st.markdown( 
+                                f"- **{feature_name}** " 
+                                f"({row['mean_shap']:+.2f})" 
+                            )
+
+                # ====================================================
+                # STRONGEST FEATURE EXPLANATION
+                # ====================================================
+
+                # Features that should not dominate the natural-language
+                # explanation every time because they are historical AQI lags.
+                EXCLUDED_FROM_PRIMARY_EXPLANATION = {
+                    "aqi_lag_1",
+                    "aqi_lag_3",
+                    "aqi_lag_6",
+                    "aqi_lag_12",
+                    "aqi_lag_24",
+                    "aqi_lag_48",
+                    "aqi_lag_72",
+                }
+
+                # First try to find the strongest non-AQI-lag feature.
+                meaningful_df = aggregate_df[
+                    ~aggregate_df["feature"].isin(
+                        EXCLUDED_FROM_PRIMARY_EXPLANATION
+                    )
+                ].copy()
+
+                # If there are meaningful non-lag features available,
+                # use the strongest one.
+                if not meaningful_df.empty:
+
+                    strongest = (
+                        meaningful_df
+                        .sort_values(
+                            "mean_abs_shap",
+                            ascending=False,
+                        )
+                        .iloc[0]
+                    )
+
+                else:
+
+                    # Fallback: if every available feature is an AQI lag,
+                    # use the strongest actual feature.
+                    strongest = (
+                        aggregate_df
+                        .sort_values(
+                            "mean_abs_shap",
+                            ascending=False,
+                        )
+                        .iloc[0]
+                    )
+
+
+                strongest_feature = str(
+                    strongest["feature"]
+                )
+
+                strongest_name = friendly_feature_name(
+                    strongest_feature
                 )
 
                 strongest_value = float(
                     strongest["mean_shap"]
                 )
 
+
+                # ====================================================
+                # DISPLAY NATURAL-LANGUAGE EXPLANATION
+                # ====================================================
+
                 if strongest_value > 0:
 
                     st.info(
-                        f" **What this means:** "
-                        f"{strongest_name} was one of the "
-                        f"strongest factors pushing the predicted "
-                        f"AQI higher on {forecast_date}."
+                        f"**What this means:** "
+                        f"{strongest_name} was one of the strongest factors "
+                        f"pushing the predicted AQI higher on "
+                        f"{forecast_date}."
                     )
 
                 elif strongest_value < 0:
 
                     st.success(
-                        f" **What this means:** "
-                        f"{strongest_name} was one of the "
-                        f"strongest factors helping to keep the "
-                        f"predicted AQI lower on {forecast_date}."
+                        f"**What this means:** "
+                        f"{strongest_name} was one of the strongest factors "
+                        f"helping to keep the predicted AQI lower on "
+                        f"{forecast_date}."
                     )
 
                 else:
 
                     st.info(
-                        f" **What this means:** "
+                        f"**What this means:** "
                         f"{strongest_name} had the strongest overall "
                         f"influence on the prediction for "
                         f"{forecast_date}."
                     )
 
+                # ==================================================== 
+                # TECHNICAL VALIDATION  
+                # ==================================================== 
+                
+                with st.expander( 
+                    "View SHAP feature details" 
+                ): 
+                    details_df = ( 
+                        aggregate_df 
+                        .sort_values( 
+                            "mean_abs_shap", 
+                            ascending=False, 
+                        ) 
+                        .copy() 
+                    ) 
+
+                    details_df["friendly_name"] = ( 
+                        details_df["feature"] 
+                        .apply( 
+                            friendly_feature_name 
+                        ) 
+                    ) 
+
+                    details_df = details_df[ 
+                        [ 
+                            "feature", 
+                            "friendly_name", 
+                            "mean_shap", 
+                            "mean_abs_shap", 
+                        ] 
+                    ] 
+
+                    details_df = details_df.rename( 
+                        columns={ 
+                            "feature": 
+                                "Technical Feature", 
+
+                            "friendly_name": 
+                                "Dashboard Feature", 
+
+                            "mean_shap": 
+                                "Mean SHAP", 
+
+                            "mean_abs_shap": 
+                                "Mean Absolute SHAP", 
+                        } 
+                    ) 
+
+                    st.dataframe( 
+                        details_df, 
+                        width="stretch", 
+                        hide_index=True, 
+                    ) 
+
+                st.caption( 
+                        "These explanations summarize the factors " 
+                        "considered by the prediction model. They do " 
+                        "not mean that one factor alone determines AQI." 
+                    ) 
+
+            except requests.HTTPError as exc: 
+
+                st.error( 
+                        f"Unable to load the explanation for " 
+                        f"{forecast_date}: {exc}" 
+                ) 
+
+            except Exception as exc: 
+
+                st.error( 
+                        f"Unable to display the explanation for " 
+                        f"{forecast_date}: {exc}" 
+                )         
                 # ------------------------------------------------
                 # SIMPLE LEGEND
                 # ------------------------------------------------
