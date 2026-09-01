@@ -138,7 +138,7 @@ PREDICTION_FEATURE_SERVICE = (
 # ============================================================
 
 LOCATION_ID = "peshawar"
-
+TIMEZONE = "Asia/Karachi"
 
 LATITUDE = 34.008
 LONGITUDE = 71.5785
@@ -2562,7 +2562,7 @@ def generate_forecast(
 
         feature_record[
             "timestamp"
-        ] = anchor_timestamp
+        ] = prediction_timestamp
 
         feature_records.append(
             feature_record
