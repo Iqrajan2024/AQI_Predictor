@@ -2,7 +2,7 @@ name: Pearls AQI - Hourly Feature Pipeline
 
 on:
   schedule:
-    - cron: "37 * * * *"
+    - cron: "15 * * * *"
 
   workflow_dispatch:
 

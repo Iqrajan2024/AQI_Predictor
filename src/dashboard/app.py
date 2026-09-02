@@ -24,6 +24,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import mlflow
+from mlflow import MlflowClient
 
 # ============================================================
 # PAGE CONFIG
@@ -57,6 +59,16 @@ EVALUATION_DAILY_METRICS_FILE = (
 )
 
 # ============================================================
+# MLOps / MODEL REGISTRY
+# ============================================================
+
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
+MLFLOW_MODEL_ALIAS = "champion"
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+
+# ============================================================
 # CSS
 # ============================================================
 
@@ -74,6 +86,21 @@ st.markdown(
                 opacity: 0.70;
                 font-size: 1rem;
                 margin-bottom: 1.5rem;
+            }
+
+            /* =========================================================
+            SIDEBAR PERFORMANCE METRICS
+            ========================================================= */
+
+            [data-testid="stSidebar"] [data-testid="stMetricValue"] {
+                font-size: 1rem !important;
+                line-height: 1.1 !important;
+                font-weight: 600 !important;
+            }
+
+            [data-testid="stSidebar"] [data-testid="stMetricLabel"] {
+                font-size: 0.72rem !important;
+                line-height: 1 !important;
             }
 
             /* Smaller RMSE metric values ONLY inside forecast cards */
@@ -686,6 +713,39 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
 
     return normalized
 
+# ============================================================
+# GET CURRENT CHAMPION MODEL INFORMATION
+# ============================================================
+
+def get_champion_model_info() -> dict:
+    """
+    Get the model currently assigned to the MLflow champion alias.
+    """
+
+    try:
+        client = MlflowClient(
+            tracking_uri=MLFLOW_TRACKING_URI
+        )
+
+        model_version = (
+            client.get_model_version_by_alias(
+                MLFLOW_MODEL_NAME,
+                MLFLOW_MODEL_ALIAS,
+            )
+        )
+
+        return {
+            "name": MLFLOW_MODEL_NAME,
+            "version": str(model_version.version),
+            "alias": MLFLOW_MODEL_ALIAS,
+        }
+
+    except Exception:
+        return {
+            "name": MLFLOW_MODEL_NAME,
+            "version": "N/A",
+            "alias": MLFLOW_MODEL_ALIAS,
+        }
 
 # ============================================================
 # SIDEBAR
@@ -694,14 +754,6 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
 with st.sidebar:
     st.header("⚙️ Dashboard Settings")
 
-    api_url = st.text_input(
-        "FastAPI URL",
-        value=st.session_state.api_url,
-    ).rstrip("/")
-
-    st.session_state.api_url = api_url
-
-    st.divider()
 
     st.subheader("Theme")
 
@@ -710,7 +762,131 @@ with st.sidebar:
         "between the configured light and dark themes."
     )
 
-    st.divider()
+    # ============================================================
+    # MLOPS / MODEL INFORMATION
+    # ============================================================
+
+    st.markdown("---")
+
+    st.subheader("MLOps")
+
+    # ------------------------------------------------------------
+    # FEATURE STORE
+    # ------------------------------------------------------------
+
+    st.markdown("**Feature Store**")
+    st.info("Feast Feature Store")
+
+    # ------------------------------------------------------------
+    # MODEL REGISTRY
+    # ------------------------------------------------------------
+
+    st.markdown("**Model Registry**")
+    st.info("MLflow Model Registry")
+
+    # ------------------------------------------------------------
+    # CHAMPION MODEL
+    # ------------------------------------------------------------
+
+    champion_info = get_champion_model_info()
+
+    st.markdown("**Champion Model**")
+
+    st.markdown(
+        f"""
+        **Name:** `{champion_info["name"]}`  
+        **Version:** `V{champion_info["version"]}`  
+        **Alias:** `{champion_info["alias"]}`
+        """
+    )
+
+    st.markdown("---")
+
+    # ------------------------------------------------------------
+    # MODEL PERFORMANCE
+    # ------------------------------------------------------------
+
+    st.subheader("**72-Hour Forecast Performance**")
+
+    daily_metrics = get_daily_rmse_vs_persistence()
+
+    # Load detailed daily metrics
+    try:
+        daily_metrics_df = pd.read_csv(
+            EVALUATION_DAILY_METRICS_FILE
+        )
+    except Exception:
+        daily_metrics_df = pd.DataFrame()
+
+    for day_number in [1, 2, 3]:
+
+        day_label = f"Day {day_number}"
+
+        if not daily_metrics_df.empty:
+
+            if day_number == 1:
+                lead_hours = "1-24"
+            elif day_number == 2:
+                lead_hours = "25-48"
+            else:
+                lead_hours = "49-72"
+
+            day_row = daily_metrics_df[
+                daily_metrics_df["lead_hours"].astype(str)
+                == lead_hours
+            ]
+
+            if not day_row.empty:
+
+                row = day_row.iloc[0]
+
+                rmse = row.get("xgb_rmse")
+                mae = row.get("xgb_mae")
+                r2 = row.get("xgb_r2")
+
+                st.markdown(f"**{day_label}**")
+
+                col1, col2, col3 = st.columns(3)
+
+                with col1:
+                    st.metric(
+                        "RMSE",
+                        (
+                            f"{float(rmse):.2f}"
+                            if pd.notna(rmse)
+                            else "N/A"
+                        ),
+                    )
+
+                with col2:
+                    st.metric(
+                        "MAE",
+                        (
+                            f"{float(mae):.2f}"
+                            if pd.notna(mae)
+                            else "N/A"
+                        ),
+                    )
+
+                with col3:
+                    st.metric(
+                        "R²",
+                        (
+                            f"{float(r2):.3f}"
+                            if pd.notna(r2)
+                            else "N/A"
+                        ),
+                    )
+
+            else:
+                st.markdown(f"**{day_label}**")
+                st.caption("Metrics unavailable.")
+
+        else:
+            st.markdown(f"**{day_label}**")
+            st.caption("Metrics unavailable.")
+
+    st.markdown("---")
 
     refresh = st.button(
         "🔄 Refresh dashboard",
@@ -1050,49 +1226,149 @@ else:
                         ),
                     )
 
-                # ------------------------------------------------
-                # HEALTH ALERT
-                # ------------------------------------------------
                 
+                # ------------------------------------------------
+                # AIR QUALITY MESSAGE / HEALTH ALERT
+                # ------------------------------------------------
+
                 category_lower = str(category).strip().lower()
 
                 if alert_message or alert_recommendation:
 
+                    # ------------------------------------------------
+                    # GOOD
+                    # ------------------------------------------------
+
                     if category_lower == "good":
-                        alert_function = st.success
 
-                    elif category_lower == "moderate":
-                        alert_function = st.warning
-
-                    elif "sensitive" in category_lower:
-                        alert_function = st.warning
-
-                    elif category_lower == "unhealthy":
-                        alert_function = st.error
-
-                    elif "very unhealthy" in category_lower:
-                        alert_function = st.error
-
-                    elif "hazardous" in category_lower:
-                        alert_function = st.error
-
-                    else:
-                        alert_function = st.info
-
-                    message = (
-                        f"**{alert_level} — Health Alert**\n\n"
-                        f"{alert_message}"
-                    )
-
-                    if alert_recommendation:
-                        message += (
-                            f"\n\n**Recommendation:** "
-                            f"{alert_recommendation}"
+                        message = (
+                            f"**{alert_level} — Air Quality Message**\n\n"
+                            f"{alert_message}"
                         )
 
-                    alert_function(message)
-                            
-                            
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.success(message)
+
+                    # ------------------------------------------------
+                    # MODERATE
+                    # ------------------------------------------------
+
+                    elif category_lower == "moderate":
+
+                        message = (
+                            f"**{alert_level} — Air Quality Message**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.warning(message)
+
+                    # ------------------------------------------------
+                    # UNHEALTHY FOR SENSITIVE GROUPS
+                    # ------------------------------------------------
+
+                    elif "sensitive" in category_lower:
+
+                        message = (
+                            f"**{alert_level} — Health Alert**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.warning(message)
+
+                    # ------------------------------------------------
+                    # UNHEALTHY
+                    # ------------------------------------------------
+
+                    elif category_lower == "unhealthy":
+
+                        message = (
+                            f"**{alert_level} — Health Alert**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.error(message)
+
+                    # ------------------------------------------------
+                    # VERY UNHEALTHY
+                    # ------------------------------------------------
+
+                    elif "very unhealthy" in category_lower:
+
+                        message = (
+                            f"**{alert_level} — Health Alert**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.error(message)
+
+                    # ------------------------------------------------
+                    # HAZARDOUS
+                    # ------------------------------------------------
+
+                    elif "hazardous" in category_lower:
+
+                        message = (
+                            f"**{alert_level} — Health Alert**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.error(message)
+
+                    # ------------------------------------------------
+                    # UNKNOWN
+                    # ------------------------------------------------
+
+                    else:
+
+                        message = (
+                            f"**{alert_level} — Air Quality Message**\n\n"
+                            f"{alert_message}"
+                        )
+
+                        if alert_recommendation:
+                            message += (
+                                f"\n\n**Recommendation:** "
+                                f"{alert_recommendation}"
+                            )
+
+                        st.info(message)
+
+                        
 # ============================================================
 # 72-HOUR FORECAST TREND
 # ============================================================

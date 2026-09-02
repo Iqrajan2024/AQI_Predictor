@@ -5,7 +5,7 @@ import warnings
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.metrics import mean_absolute_error, mean_squared_error
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 warnings.filterwarnings("ignore")
 
@@ -890,7 +890,14 @@ def calculate_metrics(
         )
     )
 
-    return rmse, mae
+    r2 = float(
+            r2_score(
+                actual,
+                predicted,
+            )
+        )
+
+    return rmse, mae, r2
 
 
 # ============================================================
@@ -1030,14 +1037,14 @@ def main():
         # Quick per-origin metrics
         # ----------------------------------------------------
 
-        xgb_rmse, xgb_mae = (
+        xgb_rmse, xgb_mae, xgb_r2 = (
             calculate_metrics(
                 forecast["actual_aqi"],
                 forecast["predicted_aqi"],
             )
         )
 
-        persistence_rmse, persistence_mae = (
+        persistence_rmse, persistence_mae, persistence_r2 = (
             calculate_metrics(
                 forecast["actual_aqi"],
                 forecast["persistence_aqi"],
@@ -1075,6 +1082,12 @@ def main():
         )
 
         print(
+            f"XGB R²:   {xgb_r2:.4f} | "
+            f"Persistence R²: "
+            f"{persistence_r2:.4f}"
+        )
+
+        print(
             f"RMSE improvement: "
             f"{rmse_improvement:.2f}%"
         )
@@ -1109,14 +1122,14 @@ def main():
         "persistence_aqi"
     ].to_numpy()
 
-    xgb_rmse, xgb_mae = (
+    xgb_rmse, xgb_mae, xgb_r2 = (
         calculate_metrics(
             actual,
             predicted,
         )
     )
 
-    persistence_rmse, persistence_mae = (
+    persistence_rmse, persistence_mae, persistence_r2 = (
         calculate_metrics(
             actual,
             persistence,
@@ -1182,7 +1195,7 @@ def main():
             "persistence_aqi"
         ].to_numpy()
 
-        day_xgb_rmse, day_xgb_mae = (
+        day_xgb_rmse, day_xgb_mae, day_xgb_r2 = (
             calculate_metrics(
                 actual_day,
                 predicted_day,
@@ -1192,6 +1205,7 @@ def main():
         (
             day_persistence_rmse,
             day_persistence_mae,
+            day_persistence_r2,
         ) = calculate_metrics(
             actual_day,
             persistence_day,
@@ -1225,10 +1239,14 @@ def main():
                     day_xgb_rmse,
                 "xgb_mae":
                     day_xgb_mae,
+                "xgb_r2":
+                    day_xgb_r2,
                 "persistence_rmse":
                     day_persistence_rmse,
                 "persistence_mae":
                     day_persistence_mae,
+                "persistence_r2":
+                    day_persistence_r2,
                 "rmse_improvement_percent":
                     day_rmse_improvement,
                 "mae_improvement_percent":
@@ -1290,11 +1308,17 @@ def main():
             "xgb_mae":
                 xgb_mae,
 
+            "xgb_r2":
+                xgb_r2,
+
             "persistence_rmse":
                 persistence_rmse,
 
             "persistence_mae":
                 persistence_mae,
+
+            "persistence_r2":
+                persistence_r2,
 
             "rmse_improvement_percent":
                 rmse_improvement,
@@ -1364,6 +1388,11 @@ def main():
     )
 
     print(
+        f"XGBoost R²:          "
+        f"{xgb_r2:.4f}"
+    )
+
+    print(
         f"Persistence RMSE:   "
         f"{persistence_rmse:.4f}"
     )
@@ -1371,6 +1400,11 @@ def main():
     print(
         f"Persistence MAE:    "
         f"{persistence_mae:.4f}"
+    )
+
+    print(
+        f"Persistence R²:     "
+        f"{persistence_r2:.4f}"
     )
 
     print(
