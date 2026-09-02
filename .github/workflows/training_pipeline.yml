@@ -131,8 +131,22 @@ jobs:
           # -----------------------------------------------
 
           cp \
-            ".feature_restore/processed/aqi_features.parquet" \
+            ".feature_restore/data/processed/aqi_features.parquet" \
             "data/processed/aqi_features.parquet"
+
+          # -----------------------------------------------
+          # Restore raw dataset
+          # -----------------------------------------------
+
+          if [ -f \
+            ".feature_restore/data/raw/peshawar_openmeteo_2024_2026.csv"
+          ]; then
+            mkdir -p data/raw
+
+            cp \
+              ".feature_restore/data/raw/peshawar_openmeteo_2024_2026.csv" \
+              "data/raw/peshawar_openmeteo_2024_2026.csv"
+          fi
 
           # -----------------------------------------------
           # Restore Feast registry if present
@@ -176,6 +190,14 @@ jobs:
 
           echo "======================================"
 
+          echo "======================================"
+          echo "FEAST STATE RESTORED"
+          echo "======================================"
+
+          ls -lh \
+            feature_repo/feature_repo/data/
+
+          echo "======================================"
 
       # ======================================================
       # 7. APPLY FEAST
