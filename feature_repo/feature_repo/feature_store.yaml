@@ -4,11 +4,15 @@ registry: data/registry.db
 
 provider: local
 
+online_store:
+  type: postgres
+  host: aws-0-ap-southeast-1.pooler.supabase.com
+  port: 5432
+  database: postgres
+  db_schema: feast
+  user: postgres.oqlkezujkockvlzzkccq
+  password: 7d*77D5jxet%69Y
+  sslmode: require
+
 offline_store:
   type: duckdb
-
-online_store:
-  type: sqlite
-  path: data/online_store.db
-
-entity_key_serialization_version: 3

@@ -1,0 +1,18 @@
+project: pearls_aqi
+
+registry: ${FEAST_REGISTRY_PATH}
+
+provider: local
+
+online_store:
+  type: postgres
+  host: ${FEAST_POSTGRES_HOST}
+  port: ${FEAST_POSTGRES_PORT}
+  database: ${FEAST_POSTGRES_DATABASE}
+  db_schema: ${FEAST_POSTGRES_SCHEMA}
+  user: ${FEAST_POSTGRES_USER}
+  password: ${FEAST_POSTGRES_PASSWORD}
+  sslmode: ${FEAST_POSTGRES_SSLMODE}
+
+offline_store:
+  type: duckdb
