@@ -1037,33 +1037,7 @@ def train():
         winner_name
     ]
 
-    # ========================================================
-    # LOG PERSISTENCE BASELINE TO WINNING RUN
-    # ========================================================
-
-    with mlflow.start_run(
-        run_id=winner_run_id
-    ):
-
-        mlflow.log_metrics(
-            {
-                "persistence_test_rmse":
-                    persistence_rmse,
-
-                "persistence_test_mae":
-                    persistence_mae,
-
-                "persistence_test_r2":
-                    persistence_r2,
-
-                "rmse_improvement_vs_persistence_pct":
-                    rmse_improvement,
-
-                "mae_improvement_vs_persistence_pct":
-                    mae_improvement,
-            }
-        )
-
+    
     print(
         "\nWINNER:",
         winner_name,
@@ -1112,6 +1086,34 @@ def train():
         )
         / persistence_mae
     ) * 100
+
+    # ========================================================
+    # LOG PERSISTENCE BASELINE TO WINNING RUN
+    # ========================================================
+
+    with mlflow.start_run(
+        run_id=winner_run_id
+    ):
+
+        mlflow.log_metrics(
+            {
+                "persistence_test_rmse":
+                    persistence_rmse,
+
+                "persistence_test_mae":
+                    persistence_mae,
+
+                "persistence_test_r2":
+                    persistence_r2,
+
+                "rmse_improvement_vs_persistence_pct":
+                    rmse_improvement,
+
+                "mae_improvement_vs_persistence_pct":
+                    mae_improvement,
+            }
+        )
+
 
     print("\n" + "=" * 70)
     print("CHAMPION VS PERSISTENCE BASELINE")
