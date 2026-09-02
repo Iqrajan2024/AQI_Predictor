@@ -111,7 +111,7 @@ jobs:
           find .feature_restore -type f -print
 
           test -f \
-            ".feature_restore/processed/aqi_features.parquet"
+            ".feature_restore/data/processed/aqi_features.parquet"
 
           echo "FEATURE ARTIFACT DOWNLOAD: PASS"
 
