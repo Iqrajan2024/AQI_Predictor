@@ -50,3 +50,4 @@ data/predictions/
 # Feast local stores
 feature_repo/feature_repo/data/*.dbmodels/random_forest_aqi.pkl
 models/random_forest_aqi.pkl
+feature_repo/feature_repo/feature_store.yaml
