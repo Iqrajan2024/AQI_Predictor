@@ -26,7 +26,15 @@ if APP_ENV in {"cloud", "production", "prod"}:
         )
 
     postgres_host = os.getenv("FEAST_POSTGRES_HOST")
-    postgres_port = os.getenv("FEAST_POSTGRES_PORT", "5432")
+    postgres_port_raw = os.getenv("FEAST_POSTGRES_PORT", "5432").strip()
+
+    try:
+        postgres_port = int(postgres_port_raw)
+    except ValueError:
+        raise RuntimeError(
+            f"FEAST_POSTGRES_PORT must be an integer, got: {postgres_port_raw!r}"
+        )
+    
     postgres_database = os.getenv(
         "FEAST_POSTGRES_DATABASE",
         "postgres",
