@@ -2,54 +2,11 @@
 PEARLS AQI PREDICTOR
 NEXT 3-DAY FORECAST PIPELINE
 
-Architecture
-
-Open-Meteo
-    |
-    +-- Weather forecast
-    +-- Air-quality forecast
-    |
-    v
-Feast historical context
-    |
-    +-- 70 model features
-    +-- us_aqi recursive state
-    |
-    v
-70 model features
-    |
-    v
-MLflow @champion
-    |
-    v
-Recursive prediction
-    |
-    +-- bridge to next local midnight
-    |
-    +-- 72 saved forecast hours
-    |
-    v
-3 daily AQI averages
-
-
-IMPORTANT CONTRACT
-
-Feast prediction context:
-    70 model features + us_aqi = 71 features
-
-MLflow model input:
-    exactly 70 model features
-
-Excluded from MLflow:
-    target_aqi
-    us_aqi
-
-us_aqi:
-    retained only as recursive AQI state
 """
 
 from pathlib import Path
 import sys
+import os
 
 import mlflow
 import numpy as np
@@ -106,13 +63,14 @@ FEATURE_PREDICTION_FILE = (
 MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
 MLFLOW_MODEL_ALIAS = "champion"
 
-MLFLOW_TRACKING_URI = (
-    "http://127.0.0.1:5000"
+MLFLOW_TRACKING_URI = os.environ.get(
+    "MLFLOW_TRACKING_URI",
+    "http://127.0.0.1:5000",
 )
 
-MLFLOW_MODEL_URI = (
-    f"models:/{MLFLOW_MODEL_NAME}"
-    f"@{MLFLOW_MODEL_ALIAS}"
+MLFLOW_MODEL_URI = os.environ.get(
+    "MLFLOW_MODEL_URI",
+    "models:/Pearls_AQI_XGBoost@champion",
 )
 
 mlflow.set_tracking_uri(
