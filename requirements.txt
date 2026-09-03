@@ -14,7 +14,7 @@ joblib==1.5.3
 
 # Feast
 feast==0.66.0
-duckdb==1.5.5
+duckdb==1.4.4
 psycopg==3.3.3
 psycopg-binary==3.3.3
 psycopg-pool==3.3.1
