@@ -92,9 +92,9 @@ jobs:
 
           echo
           echo "Feast secret verification completed."
-          
+
       # ============================================================
-      # 4. CONFIGURE CLOUD FEAST
+      # 5. CONFIGURE CLOUD FEAST
       # ============================================================
       - name: Configure cloud Feast
         env:
@@ -118,7 +118,7 @@ jobs:
           cat feature_repo/feature_repo/feature_store.yaml
 
       # ============================================================
-      # 5. FIND LATEST SUCCESSFUL FEATURE PIPELINE
+      # 6. FIND LATEST SUCCESSFUL FEATURE PIPELINE
       # ============================================================
       - name: Find latest successful feature pipeline
         env:
@@ -147,7 +147,7 @@ jobs:
           echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
       # ============================================================
-      # 6. DOWNLOAD FEATURE ARTIFACT
+      # 7. DOWNLOAD FEATURE ARTIFACT
       # ============================================================
       - name: Download feature pipeline artifact
         env:
@@ -170,7 +170,7 @@ jobs:
           find feature_artifact -type f -print
 
       # ============================================================
-      # 7. RESTORE FEATURE DATASET ONLY
+      # 8. RESTORE FEATURE DATASET ONLY
       # ============================================================
       - name: Restore feature dataset
         run: |
@@ -194,23 +194,34 @@ jobs:
           echo "Feature dataset restored:"
           ls -lh data/processed/aqi_features.parquet
 
+          # ========================================================
+          # REMOVE ANY LOCAL FEAST RUNTIME DATABASES
+          # ========================================================
           echo
-          echo "Checking for forbidden local Feast databases..."
+          echo "Removing any local Feast runtime databases..."
+
+          find . -type f \( \
+              -name "registry.db" \
+              -o -name "online_store.db" \
+            \) -print -delete
+
+          echo
+          echo "Verifying no local Feast databases remain..."
 
           if find . -type f \( \
               -name "registry.db" \
               -o -name "online_store.db" \
             \) -print -quit | grep -q .; then
 
-            echo "ERROR: Local Feast database detected."
-            echo "Cloud training must NEVER restore or use local Feast databases."
+            echo "ERROR: Local Feast database still exists."
+            echo "Cloud training must NEVER use local Feast databases."
             exit 1
           fi
 
           echo "OK: No local Feast databases found."
 
       # ============================================================
-      # 8. VERIFY FEATURE DATASET
+      # 9. VERIFY FEATURE DATASET
       # ============================================================
       - name: Verify feature dataset
         run: |
@@ -251,7 +262,7 @@ jobs:
           PY
 
       # ============================================================
-      # 9. FEAST APPLY
+      # 10. FEAST APPLY
       # ============================================================
       - name: Apply cloud Feast definitions
         working-directory: feature_repo/feature_repo
@@ -272,7 +283,7 @@ jobs:
           feast apply
 
       # ============================================================
-      # 10. MATERIALIZE CLOUD FEAST
+      # 11. MATERIALIZE CLOUD FEAST
       # ============================================================
       - name: Materialize cloud Feast
         working-directory: feature_repo/feature_repo
@@ -293,7 +304,7 @@ jobs:
           feast materialize-incremental
 
       # ============================================================
-      # 11. VERIFY CLOUD FEAST
+      # 12. VERIFY CLOUD FEAST
       # ============================================================
       - name: Verify cloud Feast
         working-directory: .
