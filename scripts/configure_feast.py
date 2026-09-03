@@ -1,4 +1,5 @@
 from pathlib import Path
+from urllib.parse import quote_plus
 import os
 import shutil
 
@@ -23,11 +24,6 @@ if APP_ENV in {"cloud", "production", "prod"}:
         raise FileNotFoundError(
             f"Cloud Feast configuration not found: {CLOUD_CONFIG}"
         )
-
-    feast_registry_path = os.getenv(
-        "FEAST_REGISTRY_PATH",
-        "data/registry.db",
-    )
 
     postgres_host = os.getenv("FEAST_POSTGRES_HOST")
     postgres_port = os.getenv("FEAST_POSTGRES_PORT", "5432")
@@ -64,9 +60,22 @@ if APP_ENV in {"cloud", "production", "prod"}:
             + ", ".join(missing)
         )
 
+    feast_registry_url = (
+        "postgresql+psycopg://"
+        f"{quote_plus(postgres_user)}:"
+        f"{quote_plus(postgres_password)}@"
+        f"{postgres_host}:"
+        f"{postgres_port}/"
+        f"{postgres_database}"
+        "?sslmode=require"
+        "&options=-csearch_path%3Dfeast"
+    )
+
     cloud_yaml = f"""project: pearls_aqi
 
-registry: {feast_registry_path}
+registry:
+  registry_type: sql
+  path: {feast_registry_url}
 
 provider: local
 
