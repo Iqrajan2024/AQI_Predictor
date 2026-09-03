@@ -53,7 +53,7 @@ jobs:
           pip install -r requirements.txt
 
       # ============================================================
-      # 4. VERIFY FEAST SECRETS
+      # VERIFY FEAST SECRETS
       # ============================================================
       - name: Verify Feast secrets
         env:
@@ -94,7 +94,7 @@ jobs:
           echo "Feast secret verification completed."
 
       # ============================================================
-      # 5. CONFIGURE CLOUD FEAST
+      # 4. CONFIGURE CLOUD FEAST
       # ============================================================
       - name: Configure cloud Feast
         env:
@@ -118,7 +118,7 @@ jobs:
           cat feature_repo/feature_repo/feature_store.yaml
 
       # ============================================================
-      # 6. FIND LATEST SUCCESSFUL FEATURE PIPELINE
+      # 5. FIND LATEST SUCCESSFUL FEATURE PIPELINE
       # ============================================================
       - name: Find latest successful feature pipeline
         env:
@@ -147,7 +147,7 @@ jobs:
           echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
       # ============================================================
-      # 7. DOWNLOAD FEATURE ARTIFACT
+      # 6. DOWNLOAD FEATURE ARTIFACT
       # ============================================================
       - name: Download feature pipeline artifact
         env:
@@ -170,7 +170,7 @@ jobs:
           find feature_artifact -type f -print
 
       # ============================================================
-      # 8. RESTORE FEATURE DATASET ONLY
+      # 7. RESTORE FEATURE DATASET ONLY
       # ============================================================
       - name: Restore feature dataset
         run: |
@@ -221,7 +221,7 @@ jobs:
           echo "OK: No local Feast databases found."
 
       # ============================================================
-      # 9. VERIFY FEATURE DATASET
+      # 8. VERIFY FEATURE DATASET
       # ============================================================
       - name: Verify feature dataset
         run: |
@@ -262,7 +262,7 @@ jobs:
           PY
 
       # ============================================================
-      # 10. FEAST APPLY
+      # 9. FEAST APPLY
       # ============================================================
       - name: Apply cloud Feast definitions
         working-directory: feature_repo/feature_repo
@@ -283,7 +283,7 @@ jobs:
           feast apply
 
       # ============================================================
-      # 11. MATERIALIZE CLOUD FEAST
+      # 10. MATERIALIZE CLOUD FEAST
       # ============================================================
       - name: Materialize cloud Feast
         working-directory: feature_repo/feature_repo
@@ -301,10 +301,14 @@ jobs:
           echo "FEAST MATERIALIZE - CLOUD"
           echo "============================================================"
 
-          feast materialize-incremental
+          END_TS=$(python -c "from datetime import datetime, timezone; print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'))")
+
+          echo "Materializing through: $END_TS"
+
+          feast materialize-incremental "$END_TS"
 
       # ============================================================
-      # 12. VERIFY CLOUD FEAST
+      # 11. VERIFY CLOUD FEAST
       # ============================================================
       - name: Verify cloud Feast
         working-directory: .
