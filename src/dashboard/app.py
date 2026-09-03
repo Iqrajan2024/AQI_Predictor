@@ -2,14 +2,6 @@
 PEARLS AQI PREDICTOR
 Streamlit Dashboard
 
-Run from the project root:
-    streamlit run src/dashboard/app.py
-
-Backend:
-    FastAPI -> http://127.0.0.1:8000
-
-The dashboard consumes the existing FastAPI API. It does not bypass
-the Feast feature-store / MLflow model-registry prediction pipeline.
 """
 
 from __future__ import annotations
@@ -18,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 import textwrap
+import os
 
 import requests
 import pandas as pd
@@ -62,7 +55,10 @@ EVALUATION_DAILY_METRICS_FILE = (
 # MLOps / MODEL REGISTRY
 # ============================================================
 
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+MLFLOW_TRACKING_URI = os.getenv(
+    "MLFLOW_TRACKING_URI",
+    "http://127.0.0.1:5000",
+)
 MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
 MLFLOW_MODEL_ALIAS = "champion"
 

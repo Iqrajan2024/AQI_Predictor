@@ -4,43 +4,12 @@ PEARLS AQI PREDICTOR
 FASTAPI DASHBOARD BACKEND
 ============================================================
 
-Provides:
-
-    /health
-    /current
-    /current/trend
-    /forecast
-    /forecast/{day}
-    /shap/{day}
-    /dashboard
-
-Data sources:
-
-    Open-Meteo
-        -> current AQI
-        -> current pollutants
-        -> 24-hour AQI trend
-
-    Prediction artifacts
-        -> latest_forecast.csv
-        -> latest_daily_forecast.csv
-        -> latest_forecast_features.csv
-
-    MLflow
-        -> champion model
-        -> model RMSE
-        -> SHAP explanations
-
-    Feast
-        -> already integrated into prediction pipeline
-
-============================================================
 """
 
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
-from typing import Optional
+import os
 
 import mlflow
 import numpy as np
@@ -84,10 +53,14 @@ FORECAST_FEATURES_FILE = (
 # MLflow
 # ============================================================
 
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+MLFLOW_TRACKING_URI = os.getenv(
+    "MLFLOW_TRACKING_URI",
+    "http://127.0.0.1:5000",
+)
 
-MLFLOW_MODEL_URI = (
-    "models:/Pearls_AQI_XGBoost@champion"
+MLFLOW_MODEL_URI = os.getenv(
+    "MLFLOW_MODEL_URI",
+    "models:/Pearls_AQI_XGBoost@champion",
 )
 
 
