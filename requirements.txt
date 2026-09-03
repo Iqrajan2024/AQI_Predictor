@@ -14,12 +14,12 @@ joblib==1.5.3
 
 # Feast
 feast==0.66.0
-duckdb==1.4.4
+duckdb==1.3.2
 psycopg==3.3.3
 psycopg-binary==3.3.3
 psycopg-pool==3.3.1
 SQLAlchemy==2.0.36
-ibis-framework==12.0.0
+ibis-framework==10.8.0
 
 
 # MLflow

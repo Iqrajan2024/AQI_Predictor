@@ -1,4 +1,4 @@
-name: AQI Training Pipeline
+name: Pearls AQI - Daily Training Pipeline
 
 on:
   workflow_dispatch:
