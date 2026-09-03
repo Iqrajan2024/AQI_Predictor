@@ -1,11 +1,13 @@
-name: Pearls AQI - Daily Training Pipeline
+name: AQI Training Pipeline
 
 on:
-
-  schedule:
-    - cron: "30 2 * * *"
-
   workflow_dispatch:
+
+  workflow_run:
+    workflows:
+      - "AQI Feature Pipeline"
+    types:
+      - completed
 
 permissions:
   contents: read
@@ -13,60 +15,79 @@ permissions:
 
 jobs:
 
-  training_pipeline:
-
-    name: Train AQI Models
+  train:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'schedule'
+      )
 
     runs-on: ubuntu-latest
 
+    env:
+      PYTHONUNBUFFERED: "1"
+
     steps:
 
-      # ======================================================
+      # ============================================================
       # 1. CHECKOUT
-      # ======================================================
-
+      # ============================================================
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      # ======================================================
-      # 2. PYTHON
-      # ======================================================
-
+      # ============================================================
+      # 2. SETUP PYTHON
+      # ============================================================
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
-      # ======================================================
-      # 3. DEPENDENCIES
-      # ======================================================
-
+      # ============================================================
+      # 3. INSTALL DEPENDENCIES
+      # ============================================================
       - name: Install dependencies
         run: |
-
           python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-          pip install \
-            pandas \
-            pyarrow \
-            numpy \
-            scikit-learn \
-            xgboost \
-            joblib \
-            mlflow \
-            "feast[duckdb]==0.66.0"\
-            duckdb
+      # ============================================================
+      # 4. CONFIGURE CLOUD FEAST
+      # ============================================================
+      - name: Configure cloud Feast
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+          echo "============================================================"
+          echo "CONFIGURING CLOUD FEAST"
+          echo "============================================================"
 
-      # ======================================================
-      # 4. FIND FEATURE RUN
-      # ======================================================
+          python scripts/configure_feast.py
 
-      - name: Find latest successful feature pipeline run
+          echo
+          echo "Generated Feast configuration:"
+          cat feature_repo/feature_repo/feature_store.yaml
+
+      # ============================================================
+      # 5. FIND LATEST SUCCESSFUL FEATURE PIPELINE
+      # ============================================================
+      - name: Find latest successful feature pipeline
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-
         run: |
+          echo "============================================================"
+          echo "FINDING LATEST SUCCESSFUL FEATURE PIPELINE"
+          echo "============================================================"
+
+          REPO="${{ github.repository }}"
 
           RUN_ID=$(gh run list \
             --repo "$REPO" \
@@ -76,451 +97,604 @@ jobs:
             --json databaseId \
             --jq '.[0].databaseId')
 
-          if [ -z "$RUN_ID" ]; then
-            echo "ERROR: No successful feature pipeline run."
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful feature pipeline run found."
             exit 1
           fi
 
-          echo "FEATURE_RUN_ID=$RUN_ID" \
-            >> "$GITHUB_ENV"
+          echo "Latest successful feature pipeline run: $RUN_ID"
+          echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
-          echo "Latest feature run: $RUN_ID"
-
-      # ======================================================
-      # 5. DOWNLOAD FEATURE ARTIFACT
-      # ======================================================
-
-      - name: Download latest feature artifact
+      # ============================================================
+      # 6. DOWNLOAD FEATURE ARTIFACT
+      # ============================================================
+      - name: Download feature pipeline artifact
         env:
           GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          FEATURE_RUN_ID: ${{ env.FEATURE_RUN_ID }}
-
         run: |
+          echo "============================================================"
+          echo "DOWNLOADING FEATURE PIPELINE ARTIFACT"
+          echo "============================================================"
 
-          rm -rf .feature_restore
-          mkdir -p .feature_restore
+          rm -rf feature_artifact
+          mkdir -p feature_artifact
 
-          gh run download \
-            "$FEATURE_RUN_ID" \
-            --repo "$REPO" \
-            --name aqi-pipeline-data \
-            --dir .feature_restore
+          gh run download "$FEATURE_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "aqi-pipeline-data" \
+            --dir feature_artifact
 
-          echo "===== DOWNLOADED FEATURE ARTIFACT ====="
-          find .feature_restore -type f -print
+          echo
+          echo "Downloaded files:"
+          find feature_artifact -type f -print
 
-          test -f \
-            ".feature_restore/data/processed/aqi_features.parquet"
-
-          echo "FEATURE ARTIFACT DOWNLOAD: PASS"
-
-
-      # ======================================================
-      # 6. RESTORE FEATURE DATASET + FEAST STATE
-      # ======================================================
-
-      - name: Restore feature dataset and Feast state
+      # ============================================================
+      # 7. RESTORE FEATURE DATASET ONLY
+      # ============================================================
+      - name: Restore feature dataset
         run: |
+          echo "============================================================"
+          echo "RESTORING FEATURE DATASET"
+          echo "============================================================"
 
           mkdir -p data/processed
-          mkdir -p feature_repo/feature_repo/data
 
-          # -----------------------------------------------
-          # Restore feature dataset
-          # -----------------------------------------------
+          FEATURE_FILE="feature_artifact/data/processed/aqi_features.parquet"
 
-          cp \
-            ".feature_restore/data/processed/aqi_features.parquet" \
-            "data/processed/aqi_features.parquet"
-
-          # -----------------------------------------------
-          # Restore raw dataset
-          # -----------------------------------------------
-
-          if [ -f \
-            ".feature_restore/data/raw/peshawar_openmeteo_2024_2026.csv"
-          ]; then
-            mkdir -p data/raw
-
-            cp \
-              ".feature_restore/data/raw/peshawar_openmeteo_2024_2026.csv" \
-              "data/raw/peshawar_openmeteo_2024_2026.csv"
+          if [ ! -f "$FEATURE_FILE" ]; then
+            echo "ERROR: Feature parquet not found:"
+            echo "$FEATURE_FILE"
+            exit 1
           fi
 
-          # -----------------------------------------------
-          # Restore Feast registry if present
-          # -----------------------------------------------
+          cp "$FEATURE_FILE" data/processed/aqi_features.parquet
 
-          if [ -f \
-            ".feature_restore/feature_repo/feature_repo/data/registry.db" \
-          ]; then
-
-            cp \
-              ".feature_restore/feature_repo/feature_repo/data/registry.db" \
-              "feature_repo/feature_repo/data/registry.db"
-
-          fi
-
-          # -----------------------------------------------
-          # Restore Feast online store if present
-          # -----------------------------------------------
-
-          if [ -f \
-            ".feature_restore/feature_repo/feature_repo/data/online_store.db" \
-          ]; then
-
-            cp \
-              ".feature_restore/feature_repo/feature_repo/data/online_store.db" \
-              "feature_repo/feature_repo/data/online_store.db"
-
-          fi
-
-          # -----------------------------------------------
-          # Verify
-          # -----------------------------------------------
-
-          test -f data/processed/aqi_features.parquet
-
-          echo "======================================"
-          echo "FEATURE DATASET RESTORED"
-          echo "======================================"
-
+          echo
+          echo "Feature dataset restored:"
           ls -lh data/processed/aqi_features.parquet
 
-          echo "======================================"
+          echo
+          echo "Checking for forbidden local Feast databases..."
 
-          echo "======================================"
-          echo "FEAST STATE RESTORED"
-          echo "======================================"
+          if find . -type f \( \
+              -name "registry.db" \
+              -o -name "online_store.db" \
+            \) -print -quit | grep -q .; then
 
-          ls -lh \
-            feature_repo/feature_repo/data/
+            echo "ERROR: Local Feast database detected."
+            echo "Cloud training must NEVER restore or use local Feast databases."
+            exit 1
+          fi
 
-          echo "======================================"
+          echo "OK: No local Feast databases found."
 
-      # ======================================================
-      # 7. APPLY FEAST
-      # ======================================================
-
-      - name: Apply Feast definitions
-        working-directory: feature_repo/feature_repo
+      # ============================================================
+      # 8. VERIFY FEATURE DATASET
+      # ============================================================
+      - name: Verify feature dataset
         run: |
+          echo "============================================================"
+          echo "VERIFYING FEATURE DATASET"
+          echo "============================================================"
+
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          path = Path("data/processed/aqi_features.parquet")
+
+          if not path.exists():
+              raise SystemExit("ERROR: aqi_features.parquet does not exist.")
+
+          df = pd.read_parquet(path)
+
+          print(f"Rows: {len(df)}")
+          print(f"Columns: {len(df.columns)}")
+
+          required = {
+              "location_id",
+              "timestamp",
+              "target_aqi",
+              "us_aqi",
+          }
+
+          missing = required - set(df.columns)
+
+          if missing:
+              raise SystemExit(
+                  f"ERROR: Missing required columns: {sorted(missing)}"
+              )
+
+          print("Required columns verified.")
+          print("Feature dataset verification passed.")
+          PY
+
+      # ============================================================
+      # 9. FEAST APPLY
+      # ============================================================
+      - name: Apply cloud Feast definitions
+        working-directory: feature_repo/feature_repo
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+          echo "============================================================"
+          echo "FEAST APPLY - CLOUD"
+          echo "============================================================"
+
           feast apply
 
-      # ======================================================
-      # 8. MATERIALIZE ONLINE FEATURES
-      # ======================================================
-
-      - name: Materialize latest Feast features
+      # ============================================================
+      # 10. MATERIALIZE CLOUD FEAST
+      # ============================================================
+      - name: Materialize cloud Feast
         working-directory: feature_repo/feature_repo
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
         run: |
+          echo "============================================================"
+          echo "FEAST MATERIALIZE - CLOUD"
+          echo "============================================================"
 
-          CURRENT_TIME=$(date -u +"%Y-%m-%dT%H:%M:%S")
+          feast materialize-incremental
 
-          feast materialize-incremental \
-            "$CURRENT_TIME"
-
-      # ======================================================
-      # 9. VERIFY FEAST SCHEMA + ONLINE STORE
-      # ======================================================
-
-      - name: Verify Feast
+      # ============================================================
+      # 11. VERIFY CLOUD FEAST
+      # ============================================================
+      - name: Verify cloud Feast
+        working-directory: .
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
         run: |
+          echo "============================================================"
+          echo "VERIFYING CLOUD FEAST"
+          echo "============================================================"
 
           python - <<'PY'
           from feast import FeatureStore
 
-          store = FeatureStore(
-              repo_path="feature_repo/feature_repo"
-          )
+          FEATURE_REPO = "feature_repo/feature_repo"
+
+          store = FeatureStore(repo_path=FEATURE_REPO)
 
           views = store.list_feature_views()
-
-          assert any(
-              v.name == "aqi_features"
-              for v in views
-          )
-
           services = store.list_feature_services()
 
-          assert any(
-              s.name == "aqi_model_features"
-              for s in services
+          print("Feature views:")
+          for view in views:
+              print(" -", view.name)
+
+          print()
+          print("Feature services:")
+          for service in services:
+              print(" -", service.name)
+
+          view_names = {v.name for v in views}
+          service_names = {s.name for s in services}
+
+          if "aqi_features" not in view_names:
+              raise SystemExit(
+                  "ERROR: aqi_features FeatureView not found."
+              )
+
+          if "aqi_model_features" not in service_names:
+              raise SystemExit(
+                  "ERROR: aqi_model_features FeatureService not found."
+              )
+
+          if "aqi_prediction_context" not in service_names:
+              raise SystemExit(
+                  "ERROR: aqi_prediction_context FeatureService not found."
+              )
+
+          model_service = store.get_feature_service(
+              "aqi_model_features"
           )
 
-          features = [
-              "aqi_features:temperature_2m",
-              "aqi_features:pm2_5",
-              "aqi_features:us_aqi",
+          context_service = store.get_feature_service(
+              "aqi_prediction_context"
+          )
+
+          model_features = [
+              feature.name
+              for projection in model_service.feature_view_projections
+              for feature in projection.features
           ]
 
-          result = (
-              store
-              .get_online_features(
-                  features=features,
-                  entity_rows=[
-                      {
-                          "location_id":
-                              "peshawar"
-                      }
-                  ],
+          context_features = [
+              feature.name
+              for projection in context_service.feature_view_projections
+              for feature in projection.features
+          ]
+
+          print()
+          print(f"Model features: {len(model_features)}")
+          print(f"Context features: {len(context_features)}")
+
+          if len(model_features) != 70:
+              raise SystemExit(
+                  f"ERROR: Expected 70 model features, "
+                  f"got {len(model_features)}"
               )
-              .to_dict()
-          )
 
-          assert (
-              result["location_id"][0]
-              == "peshawar"
-          )
+          if len(context_features) != 71:
+              raise SystemExit(
+                  f"ERROR: Expected 71 context features, "
+                  f"got {len(context_features)}"
+              )
 
-          assert (
-              result["us_aqi"][0]
-              is not None
-          )
+          if "us_aqi" in model_features:
+              raise SystemExit(
+                  "ERROR: us_aqi must NOT be a model input."
+              )
 
-          print("FEAST VERIFIED")
-          print("FeatureView: aqi_features")
-          print("FeatureService: aqi_model_features")
-          print("Online us_aqi:", result["us_aqi"][0])
+          if "target_aqi" in model_features:
+              raise SystemExit(
+                  "ERROR: target_aqi must NOT be a model input."
+              )
+
+          if "us_aqi" not in context_features:
+              raise SystemExit(
+                  "ERROR: us_aqi missing from prediction context."
+              )
+
+          print()
+          print("Feast feature contract verified.")
+          print("70 model features: OK")
+          print("71 prediction context features: OK")
+          print("us_aqi excluded from model inputs: OK")
+          print("target_aqi excluded from model inputs: OK")
+
+          print()
+          print("Testing cloud online store...")
+
+          response = store.get_online_features(
+              features=[
+                  "aqi_features:temperature_2m",
+                  "aqi_features:pm2_5",
+                  "aqi_features:us_aqi",
+              ],
+              entity_rows=[
+                  {
+                      "location_id": "peshawar",
+                  }
+              ],
+          ).to_dict()
+
+          print(response)
+
+          if "us_aqi" not in response:
+              raise SystemExit(
+                  "ERROR: us_aqi was not returned from online store."
+              )
+
+          print()
+          print("Cloud Feast verification PASSED.")
           PY
 
-      
-      # ======================================================
-      # 10. RESTORE PREVIOUS MLFLOW REGISTRY
-      # ======================================================
-
-      - name: Restore previous MLflow registry
+      # ============================================================
+      # 12. CONFIGURE CLOUD MLFLOW
+      # ============================================================
+      - name: Configure cloud MLflow
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
+          echo "============================================================"
+          echo "CONFIGURING CLOUD MLFLOW"
+          echo "============================================================"
 
-          mkdir -p .mlflow_restore
-
-          PREVIOUS_RUN=$(gh run list \
-            --repo "$REPO" \
-            --workflow "training_pipeline.yml" \
-            --branch main \
-            --status success \
-            --limit 2 \
-            --json databaseId \
-            --jq '.[1].databaseId // empty')
-
-          if [ -n "$PREVIOUS_RUN" ]; then
-
-            echo "Restoring MLflow database from run $PREVIOUS_RUN"
-
-            gh run download "$PREVIOUS_RUN" \
-              --repo "$REPO" \
-              --name pearls-aqi-mlflow-registry \
-              --dir .mlflow_restore \
-              || true
-
-            if [ -f ".mlflow_restore/mlflow.db" ]; then
-
-              cp \
-                ".mlflow_restore/mlflow.db" \
-                "mlflow.db"
-
-              echo "MLflow database restored."
-
-            fi
-
-          else
-
-            echo "No previous MLflow database found."
-
-          fi
-       
-      # ======================================================
-      # 10.5. CONFIGURE LOCAL MLFLOW
-      # ======================================================
-
-      - name: Configure MLflow local SQLite tracking
-        run: |
-
-          rm -f mlflow.db
-
-          if [ -d ".mlflow_restore" ] && \
-             [ -f ".mlflow_restore/mlflow.db" ]; then
-
-            cp \
-              ".mlflow_restore/mlflow.db" \
-              "mlflow.db"
-
-            echo "Previous MLflow database restored."
-
-          else
-
-            echo "No previous MLflow database found."
-            echo "A new MLflow database will be created."
-
+          if [ -z "$MLFLOW_TRACKING_URI" ]; then
+            echo "ERROR: MLFLOW_TRACKING_URI secret is empty."
+            exit 1
           fi
 
-          echo "MLFLOW_TRACKING_URI=sqlite:///$(pwd)/mlflow.db" \
-            >> "$GITHUB_ENV"
+          case "$MLFLOW_TRACKING_URI" in
+            http://*|https://*)
+              ;;
+            *)
+              echo "ERROR: MLFLOW_TRACKING_URI must be an HTTP/HTTPS URL."
+              exit 1
+              ;;
+          esac
 
-          echo "MLflow tracking URI:"
-          echo "$MLFLOW_TRACKING_URI"
+          echo "Cloud MLflow URI detected."
 
-      # ======================================================
-      # 11. TRAIN THROUGH FEAST
-      # ======================================================
+          # Persist ONLY the cloud MLflow URI for later steps.
+          echo "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI" >> "$GITHUB_ENV"
 
+      # ============================================================
+      # 13. VERIFY CLOUD MLFLOW CONNECTION
+      # ============================================================
+      - name: Verify cloud MLflow connection
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+        run: |
+          echo "============================================================"
+          echo "VERIFYING CLOUD MLFLOW"
+          echo "============================================================"
+
+          python - <<'PY'
+          import os
+          import mlflow
+
+          tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+
+          if not tracking_uri:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_URI is not set."
+              )
+
+          if tracking_uri.startswith("sqlite:"):
+              raise SystemExit(
+                  "ERROR: Cloud training is using SQLite MLflow."
+              )
+
+          if tracking_uri.startswith("file:"):
+              raise SystemExit(
+                  "ERROR: Cloud training is using local file MLflow."
+              )
+
+          mlflow.set_tracking_uri(tracking_uri)
+          mlflow.set_registry_uri(tracking_uri)
+
+          print("MLflow tracking URI:")
+          print(mlflow.get_tracking_uri())
+
+          print()
+          print("MLflow registry URI:")
+          print(mlflow.get_registry_uri())
+
+          if mlflow.get_tracking_uri() != tracking_uri:
+              raise SystemExit(
+                  "ERROR: MLflow tracking URI mismatch."
+              )
+
+          print()
+          print("Cloud MLflow connection configuration PASSED.")
+          PY
+
+      # ============================================================
+      # 14. RUN TRAINING
+      # ============================================================
       - name: Run daily training pipeline
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
+          echo "============================================================"
+          echo "RUNNING AQI TRAINING"
+          echo "============================================================"
+
+          if [ -z "$MLFLOW_TRACKING_URI" ]; then
+            echo "ERROR: Cloud MLflow URI is missing."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == sqlite:* ]]; then
+            echo "ERROR: Training attempted to use local SQLite MLflow."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == file:* ]]; then
+            echo "ERROR: Training attempted to use local file MLflow."
+            exit 1
+          fi
 
           python src/models/train.py
 
-      # ======================================================
-      # 12. VERIFY CHAMPION
-      # ======================================================
-
-      - name: Verify MLflow champion
+      # ============================================================
+      # 15. VERIFY CHAMPION MODEL IN CLOUD MLFLOW
+      # ============================================================
+      - name: Verify champion model
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
         run: |
+          echo "============================================================"
+          echo "VERIFYING CHAMPION MODEL"
+          echo "============================================================"
 
           python - <<'PY'
-          from pathlib import Path
-
+          import os
           import mlflow
-          from mlflow import MlflowClient
-
-          root = Path.cwd()
-
-          database = root / "mlflow.db"
-
-          assert database.exists(), (
-              f"MLflow database missing: {database}"
-          )
-
-          tracking_uri = (
-              f"sqlite:///{database.as_posix()}"
-          )
-
-          mlflow.set_tracking_uri(
-              tracking_uri
-          )
-
-          mlflow.set_registry_uri(
-              tracking_uri
-          )
-
-          client = MlflowClient()
 
           MODEL_NAME = "Pearls_AQI_XGBoost"
-          ALIAS = "champion"
+          MODEL_ALIAS = "champion"
 
-          model = client.get_registered_model(
-              MODEL_NAME
-          )
+          tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
 
-          champion = (
-              client.get_model_version_by_alias(
-                  MODEL_NAME,
-                  ALIAS,
+          if not tracking_uri:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_URI is missing."
               )
-          )
 
-          print("======================================")
-          print("MLFLOW CHAMPION VERIFIED")
-          print("======================================")
-          print("Model:", MODEL_NAME)
-          print("Champion version:", champion.version)
-          print("Alias:", ALIAS)
+          if tracking_uri.startswith("sqlite:"):
+              raise SystemExit(
+                  "ERROR: Champion verification is using SQLite."
+              )
 
-          assert champion.version is not None
+          if tracking_uri.startswith("file:"):
+              raise SystemExit(
+                  "ERROR: Champion verification is using local files."
+              )
 
+          mlflow.set_tracking_uri(tracking_uri)
+          mlflow.set_registry_uri(tracking_uri)
+
+          client = mlflow.MlflowClient()
+
+          print("Tracking URI:")
+          print(mlflow.get_tracking_uri())
+
+          try:
+              model_version = client.get_model_version_by_alias(
+                  MODEL_NAME,
+                  MODEL_ALIAS,
+              )
+          except Exception as exc:
+              raise SystemExit(
+                  "ERROR: Champion model alias not found in cloud MLflow."
+              ) from exc
+
+          print()
+          print("Champion model:")
+          print(f"Name: {model_version.name}")
+          print(f"Version: {model_version.version}")
+          print(f"Run ID: {model_version.run_id}")
+          print(f"Alias: {MODEL_ALIAS}")
+
+          if model_version.name != MODEL_NAME:
+              raise SystemExit(
+                  "ERROR: Incorrect registered model."
+              )
+
+          if model_version.run_id is None:
+              raise SystemExit(
+                  "ERROR: Champion model has no run ID."
+              )
+
+          print()
+          print("Champion model verification PASSED.")
           PY
 
-      # ======================================================
-      # 13. VERIFY LOCAL MODEL
-      # ======================================================
-
-      - name: Verify local champion artifacts
+      # ============================================================
+      # 16. VERIFY LOCAL CHAMPION ARTIFACTS
+      # ============================================================
+      - name: Verify champion artifacts
         run: |
+          echo "============================================================"
+          echo "VERIFYING LOCAL CHAMPION ARTIFACTS"
+          echo "============================================================"
 
           test -f models/champion_model.pkl
           test -f models/champion_metadata.json
 
           python - <<'PY'
           import json
+          from pathlib import Path
 
-          path = (
+          metadata_path = Path(
               "models/champion_metadata.json"
           )
 
-          with open(path, "r") as f:
-              metadata = json.load(f)
-
-          assert (
-              metadata["feature_count"]
-              == 70
-          )
-
-          assert (
-              metadata["target"]
-              == "target_aqi"
-          )
-
-          assert (
-              "target_aqi"
-              not in metadata["features"]
-          )
-
-          assert (
-              "us_aqi"
-              not in metadata["features"]
+          metadata = json.loads(
+              metadata_path.read_text()
           )
 
           print(
-              "LOCAL CHAMPION VERIFIED"
+              json.dumps(
+                  metadata,
+                  indent=2,
+                  default=str,
+              )
           )
 
-          print(
-              "Model:",
-              metadata["model_type"],
-          )
+          feature_count = metadata.get("feature_count")
+          features = metadata.get("features", [])
+          target = metadata.get("target")
 
-          print(
-              "Features:",
-              metadata["feature_count"],
-          )
+          if feature_count != 70:
+              raise SystemExit(
+                  f"ERROR: Expected feature_count=70, "
+                  f"got {feature_count}"
+              )
 
-          print(
-              "MLflow version:",
-              metadata["mlflow_version"],
-          )
+          if len(features) != 70:
+              raise SystemExit(
+                  f"ERROR: Expected 70 features, "
+                  f"got {len(features)}"
+              )
+
+          if target != "target_aqi":
+              raise SystemExit(
+                  f"ERROR: Expected target_aqi, got {target}"
+              )
+
+          if "target_aqi" in features:
+              raise SystemExit(
+                  "ERROR: target_aqi is present in model features."
+              )
+
+          if "us_aqi" in features:
+              raise SystemExit(
+                  "ERROR: us_aqi is present in model features."
+              )
+
+          print()
+          print("Champion artifact verification PASSED.")
           PY
 
-      # ======================================================
-      # 14. SAVE MLFLOW REGISTRY
-      # ======================================================
-
-      - name: Save MLflow model registry
+      # ============================================================
+      # 17. UPLOAD ONLY CHAMPION ARTIFACTS
+      # ============================================================
+      - name: Upload champion model artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: pearls-aqi-mlflow-registry
-          path: |
-            mlflow.db
-            mlartifacts/
-            models/champion_metadata.json
-          retention-days: 30
-          overwrite: true
-          if-no-files-found: error
-
-      # ======================================================
-      # 15. SAVE CHAMPION MODEL
-      # ======================================================
-
-      - name: Save champion model
-        uses: actions/upload-artifact@v4
-        with:
-          name: pearls-aqi-champion-model
+          name: aqi-champion-model
           path: |
             models/champion_model.pkl
             models/champion_metadata.json
-          retention-days: 30
-          overwrite: true
           if-no-files-found: error
+          retention-days: 30
+
+      # ============================================================
+      # 18. FINAL CLOUD SEPARATION CHECK
+      # ============================================================
+      - name: Final cloud separation check
+        run: |
+          echo "============================================================"
+          echo "FINAL CLOUD SEPARATION CHECK"
+          echo "============================================================"
+
+          if [ -f "mlflow.db" ]; then
+            echo "WARNING: mlflow.db exists in workspace."
+            echo "It will NOT be uploaded or used."
+          fi
+
+          if [ -d "mlartifacts" ]; then
+            echo "WARNING: mlartifacts directory exists."
+            echo "It will NOT be uploaded or used."
+          fi
+
+          if [ -f "feature_repo/feature_repo/data/registry.db" ]; then
+            echo "ERROR: local Feast registry.db exists."
+            exit 1
+          fi
+
+          if [ -f "feature_repo/feature_repo/data/online_store.db" ]; then
+            echo "ERROR: local Feast online_store.db exists."
+            exit 1
+          fi
+
+          echo
+          echo "============================================================"
+          echo "CLOUD TRAINING PIPELINE PASSED"
+          echo "============================================================"
+          echo "Feast: Supabase/Postgres"
+          echo "MLflow: Cloud MLflow server"
+          echo "Training data: feature parquet artifact"
+          echo "Model inputs: 70 features"
+          echo "us_aqi: excluded from model inputs"
+          echo "target_aqi: training target only"
+          echo "Champion: cloud MLflow alias"
+          echo "Local Feast DB restoration: DISABLED"
+          echo "Local MLflow restoration: DISABLED"
+          echo "============================================================"

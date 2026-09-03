@@ -36,44 +36,20 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install pandas pyarrow requests pytest "feast[duckdb]==0.66.0" duckdb
-
-      # ======================================================
-      # RESTORE PREVIOUS PIPELINE STATE
-      # ======================================================
-
-      - name: Restore latest pipeline artifact
+      
+      - name: Configure cloud Feast
         env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
         run: |
-
-          RUN_ID=$(gh run list \
-            --repo "$REPO" \
-            --workflow "feature_pipeline.yml" \
-            --branch main \
-            --status success \
-            --limit 1 \
-            --json databaseId \
-            --jq '.[0].databaseId')
-
-          if [ -z "$RUN_ID" ]; then
-            echo "No previous successful feature run."
-            echo "Initial backfill will be performed."
-            exit 0
-          fi
-
-          echo "Previous feature run: $RUN_ID"
-
-          mkdir -p .pipeline_restore
-
-          gh run download "$RUN_ID" \
-            --repo "$REPO" \
-            --name aqi-pipeline-data \
-            --dir .pipeline_restore
-
-          find .pipeline_restore -type f -print
-
+          python scripts/configure_feast.py
+      
       # ======================================================
       # RESTORE PIPELINE FILES
       # ======================================================
@@ -632,8 +608,6 @@ jobs:
           path: |
             data/raw/peshawar_openmeteo_2024_2026.csv
             data/processed/aqi_features.parquet
-            feature_repo/feature_repo/data/registry.db
-            feature_repo/feature_repo/data/online_store.db
           retention-days: 7
           overwrite: true
           if-no-files-found: error
