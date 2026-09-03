@@ -52,6 +52,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Verify Feast DuckDB dependencies
+        run: |
+          python -c "import feast; print('Feast:', feast.__version__)"
+          python -c "import ibis; print('Ibis:', ibis.__version__)"
+          python -c "import duckdb; print('DuckDB:', duckdb.__version__)"
+          python -c "import pyarrow; print('PyArrow:', pyarrow.__version__)"
+          python -c "import ibis.backends.duckdb; print('Ibis DuckDB backend: OK')"
+
       # ============================================================
       # VERIFY FEAST SECRETS
       # ============================================================
