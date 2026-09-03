@@ -53,6 +53,47 @@ jobs:
           pip install -r requirements.txt
 
       # ============================================================
+      # 4. VERIFY FEAST SECRETS
+      # ============================================================
+      - name: Verify Feast secrets
+        env:
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+          echo "============================================================"
+          echo "VERIFYING FEAST SECRETS"
+          echo "============================================================"
+
+          check_secret() {
+            NAME="$1"
+            VALUE="$2"
+
+            if [ -z "$VALUE" ]; then
+              echo "ERROR: $NAME is EMPTY"
+              return 1
+            else
+              echo "OK: $NAME is set"
+              return 0
+            fi
+          }
+
+          check_secret "FEAST_POSTGRES_HOST" "$FEAST_POSTGRES_HOST"
+          check_secret "FEAST_POSTGRES_PORT" "$FEAST_POSTGRES_PORT"
+          check_secret "FEAST_POSTGRES_DATABASE" "$FEAST_POSTGRES_DATABASE"
+          check_secret "FEAST_POSTGRES_SCHEMA" "$FEAST_POSTGRES_SCHEMA"
+          check_secret "FEAST_POSTGRES_USER" "$FEAST_POSTGRES_USER"
+          check_secret "FEAST_POSTGRES_PASSWORD" "$FEAST_POSTGRES_PASSWORD"
+          check_secret "FEAST_POSTGRES_SSLMODE" "$FEAST_POSTGRES_SSLMODE"
+
+          echo
+          echo "Feast secret verification completed."
+          
+      # ============================================================
       # 4. CONFIGURE CLOUD FEAST
       # ============================================================
       - name: Configure cloud Feast
