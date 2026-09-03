@@ -17,7 +17,7 @@ feast==0.66.0
 duckdb==1.5.5
 psycopg==3.3.3
 psycopg-binary==3.3.3
-psycopg-pool==3.3.3
+psycopg-pool==3.3.1
 SQLAlchemy==2.0.36
 ibis-framework==12.0.0
 
