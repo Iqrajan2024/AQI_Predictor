@@ -966,7 +966,179 @@ jobs:
           retention-days: 7
 
       # ============================================================
-      # 23. FINAL CLOUD SEPARATION CHECK
+      # 23. DEPLOY TO FASTAPI CLOUD
+      # ============================================================
+      - name: Deploy to FastAPI Cloud
+        env:
+          FASTAPI_CLOUD_TOKEN: ${{ secrets.FASTAPI_CLOUD_TOKEN }}
+          FASTAPI_CLOUD_APP_ID: ${{ secrets.FASTAPI_CLOUD_APP_ID }}
+        run: |
+          echo "============================================================"
+          echo "DEPLOYING TO FASTAPI CLOUD"
+          echo "============================================================"
+
+          if [ -z "$FASTAPI_CLOUD_TOKEN" ]; then
+            echo "ERROR: FASTAPI_CLOUD_TOKEN is missing."
+            exit 1
+          fi
+
+          if [ -z "$FASTAPI_CLOUD_APP_ID" ]; then
+            echo "ERROR: FASTAPI_CLOUD_APP_ID is missing."
+            exit 1
+          fi
+
+          echo
+          echo "Checking forecast files before deployment..."
+
+          test -f data/predictions/latest_forecast.csv
+          test -f data/predictions/latest_daily_forecast.csv
+          test -f data/predictions/latest_forecast_features.csv
+
+          echo "Forecast files are present."
+
+          echo
+          echo "Checking FastAPI CLI..."
+
+          fastapi --version
+
+          echo
+          echo "Deploying current workspace to FastAPI Cloud..."
+
+          fastapi deploy
+
+          echo
+          echo "FastAPI Cloud deployment command completed."
+ 
+      # ============================================================
+      # 24. VERIFY ONLINE FASTAPI FORECAST
+      # ============================================================
+      - name: Verify online FastAPI forecast
+        env:
+          FASTAPI_BASE_URL: "https://pearls-aqi-predictor-3aece6f2.fastapicloud.dev"
+        run: |
+          echo "============================================================"
+          echo "VERIFYING ONLINE FASTAPI FORECAST"
+          echo "============================================================"
+
+          python - <<'PY'
+          import os
+          import requests
+
+          BASE_URL = os.environ["FASTAPI_BASE_URL"]
+
+          print("FastAPI URL:")
+          print(BASE_URL)
+
+          print()
+          print("Checking /health...")
+
+          health = requests.get(
+              f"{BASE_URL}/health",
+              timeout=60,
+          )
+
+          print("HTTP status:", health.status_code)
+
+          if health.status_code != 200:
+              raise SystemExit(
+                  f"ERROR: /health returned {health.status_code}"
+              )
+
+          print("/health: OK")
+
+          print()
+          print("Checking /forecast...")
+
+          response = requests.get(
+              f"{BASE_URL}/forecast",
+              timeout=120,
+          )
+
+          print("HTTP status:", response.status_code)
+
+          if response.status_code != 200:
+              print(response.text)
+              raise SystemExit(
+                  f"ERROR: /forecast returned {response.status_code}"
+              )
+
+          data = response.json()
+
+          print()
+          print("Online forecast response:")
+          print(
+              "Location:",
+              data.get("location"),
+          )
+          print(
+              "Forecast days:",
+              data.get("forecast_days"),
+          )
+          print(
+              "Forecast hours:",
+              data.get("forecast_hours"),
+          )
+          print(
+              "Model:",
+              data.get("model"),
+          )
+          print(
+              "Model alias:",
+              data.get("model_alias"),
+          )
+
+          daily = data.get("daily", [])
+          hourly = data.get("hourly", [])
+
+          print()
+          print("Daily rows:", len(daily))
+          print("Hourly rows:", len(hourly))
+
+          if len(daily) != 3:
+              raise SystemExit(
+                  f"ERROR: Expected 3 daily forecast rows, got {len(daily)}"
+              )
+
+          if len(hourly) != 72:
+              raise SystemExit(
+                  f"ERROR: Expected 72 hourly forecast rows, got {len(hourly)}"
+              )
+
+          if not daily:
+              raise SystemExit(
+                  "ERROR: Online daily forecast is empty."
+              )
+
+          if not hourly:
+              raise SystemExit(
+                  "ERROR: Online hourly forecast is empty."
+              )
+
+          print()
+          print("Online daily forecast dates:")
+
+          for row in daily:
+              print(
+                  " -",
+                  row.get("date"),
+                  "AQI:",
+                  row.get("aqi"),
+              )
+
+          print()
+          print("First hourly forecast:")
+          print(hourly[0])
+
+          print()
+          print("Last hourly forecast:")
+          print(hourly[-1])
+
+          print()
+          print("ONLINE FASTAPI FORECAST VERIFICATION PASSED.")
+          PY
+
+      # ============================================================
+      # 25. FINAL CLOUD SEPARATION CHECK
       # ============================================================
       - name: Final cloud separation check
         run: |
@@ -996,7 +1168,7 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "CLOUD TRAINING + FORECAST PIPELINE PASSED"
+          echo "CLOUD TRAINING + FORECAST + DEPLOYMENT PIPELINE PASSED"
           echo "============================================================"
           echo "Feast: Supabase/Postgres"
           echo "MLflow: DagsHub"
@@ -1008,6 +1180,8 @@ jobs:
           echo "Forecast: 72 hourly predictions"
           echo "Daily forecast: 3 calendar days"
           echo "Forecast artifacts: uploaded"
+          echo "FastAPI Cloud: deployed"
+          echo "Online /forecast: verified"
           echo "Local Feast DB restoration: DISABLED"
           echo "Local MLflow restoration: DISABLED"
           echo "============================================================"

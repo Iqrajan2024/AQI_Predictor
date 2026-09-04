@@ -1,6 +1,29 @@
-data_backup/
-.git/
+# Files/directories that should never be deployed
 .venv/
+venv/
+env/
 __pycache__/
 *.pyc
 .ipynb_checkpoints/
+.git/
+.vscode/
+.streamlit/secrets.toml
+.env
+.env.*
+mlartifacts/
+mlruns/
+mlflow/
+model_registry/
+mlflow.db
+data_backup/
+
+# Local Feast databases
+feature_repo/feature_repo/data/*.db
+feature_repo/feature_repo/data/registry.db
+feature_repo/feature_repo/data/online_store.db
+
+# Keep generated forecast files in the FastAPI Cloud deployment
+!data/predictions/
+!data/predictions/latest_forecast.csv
+!data/predictions/latest_daily_forecast.csv
+!data/predictions/latest_forecast_features.csv
