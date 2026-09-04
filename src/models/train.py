@@ -1165,12 +1165,36 @@ def train():
     print("REGISTERING WINNING MODEL")
     print("=" * 70)
 
-    model_uri = (
-        f"runs:/{winner_run_id}/model"
+    # register the LoggedModel created by log_model(),
+    # rather than reconstructing runs:/<run_id>/model.
+
+
+    logged_models = mlflow.search_logged_models(
+        filter_string=f"source_run_id = '{winner_run_id}'"
+    )
+
+    if not logged_models:
+        raise RuntimeError(
+            f"No MLflow LoggedModel found for winner run: "
+            f"{winner_run_id}"
+        )
+
+    # The winning run contains exactly one model because
+    # each candidate logs its model with name="model".
+    winner_logged_model = logged_models[0]
+
+    print(
+        "Winner LoggedModel ID:",
+        winner_logged_model.model_id,
+    )
+
+    print(
+        "Winner LoggedModel URI:",
+        winner_logged_model.model_uri,
     )
 
     registered = mlflow.register_model(
-        model_uri=model_uri,
+        model_uri=winner_logged_model.model_uri,
         name=MODEL_NAME,
     )
 
