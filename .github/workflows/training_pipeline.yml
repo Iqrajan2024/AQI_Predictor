@@ -52,6 +52,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ============================================================
+      # 4. VERIFY FEAST DEPENDENCIES
+      # ============================================================
       - name: Verify Feast DuckDB dependencies
         run: |
           python -c "import feast; print('Feast:', feast.__version__)"
@@ -61,7 +64,7 @@ jobs:
           python -c "import ibis.backends.duckdb; print('Ibis DuckDB backend: OK')"
 
       # ============================================================
-      # VERIFY FEAST SECRETS
+      # 5. VERIFY FEAST SECRETS
       # ============================================================
       - name: Verify Feast secrets
         env:
@@ -102,7 +105,7 @@ jobs:
           echo "Feast secret verification completed."
 
       # ============================================================
-      # 4. CONFIGURE CLOUD FEAST
+      # 6. CONFIGURE CLOUD FEAST
       # ============================================================
       - name: Configure cloud Feast
         env:
@@ -126,7 +129,7 @@ jobs:
           cat feature_repo/feature_repo/feature_store.yaml
 
       # ============================================================
-      # 5. FIND LATEST SUCCESSFUL FEATURE PIPELINE
+      # 7. FIND FEATURE PIPELINE RUN
       # ============================================================
       - name: Find latest successful feature pipeline
         env:
@@ -155,7 +158,7 @@ jobs:
           echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
 
       # ============================================================
-      # 6. DOWNLOAD FEATURE ARTIFACT
+      # 8. DOWNLOAD FEATURE ARTIFACT
       # ============================================================
       - name: Download feature pipeline artifact
         env:
@@ -178,7 +181,7 @@ jobs:
           find feature_artifact -type f -print
 
       # ============================================================
-      # 7. RESTORE FEATURE DATASET ONLY
+      # 9. RESTORE FEATURE DATASET
       # ============================================================
       - name: Restore feature dataset
         run: |
@@ -202,34 +205,30 @@ jobs:
           echo "Feature dataset restored:"
           ls -lh data/processed/aqi_features.parquet
 
-          # ========================================================
-          # REMOVE ANY LOCAL FEAST RUNTIME DATABASES
-          # ========================================================
           echo
-          echo "Removing any local Feast runtime databases..."
+          echo "Removing local Feast databases..."
 
           find . -type f \( \
-              -name "registry.db" \
-              -o -name "online_store.db" \
-            \) -print -delete
+            -name "registry.db" \
+            -o -name "online_store.db" \
+          \) -print -delete
 
           echo
           echo "Verifying no local Feast databases remain..."
 
           if find . -type f \( \
-              -name "registry.db" \
-              -o -name "online_store.db" \
-            \) -print -quit | grep -q .; then
+            -name "registry.db" \
+            -o -name "online_store.db" \
+          \) -print -quit | grep -q .; then
 
             echo "ERROR: Local Feast database still exists."
-            echo "Cloud training must NEVER use local Feast databases."
             exit 1
           fi
 
           echo "OK: No local Feast databases found."
 
       # ============================================================
-      # 8. VERIFY FEATURE DATASET
+      # 10. VERIFY FEATURE DATASET
       # ============================================================
       - name: Verify feature dataset
         run: |
@@ -244,7 +243,9 @@ jobs:
           path = Path("data/processed/aqi_features.parquet")
 
           if not path.exists():
-              raise SystemExit("ERROR: aqi_features.parquet does not exist.")
+              raise SystemExit(
+                  "ERROR: aqi_features.parquet does not exist."
+              )
 
           df = pd.read_parquet(path)
 
@@ -266,11 +267,11 @@ jobs:
               )
 
           print("Required columns verified.")
-          print("Feature dataset verification passed.")
+          print("Feature dataset verification PASSED.")
           PY
 
       # ============================================================
-      # 9. FEAST APPLY
+      # 11. FEAST APPLY
       # ============================================================
       - name: Apply cloud Feast definitions
         working-directory: feature_repo/feature_repo
@@ -291,7 +292,7 @@ jobs:
           feast apply
 
       # ============================================================
-      # 10. MATERIALIZE CLOUD FEAST
+      # 12. MATERIALIZE CLOUD FEAST
       # ============================================================
       - name: Materialize cloud Feast
         working-directory: feature_repo/feature_repo
@@ -316,10 +317,9 @@ jobs:
           feast materialize-incremental "$END_TS"
 
       # ============================================================
-      # 11. VERIFY CLOUD FEAST
+      # 13. VERIFY CLOUD FEAST
       # ============================================================
       - name: Verify cloud Feast
-        working-directory: .
         env:
           APP_ENV: cloud
           FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
@@ -457,92 +457,104 @@ jobs:
           PY
 
       # ============================================================
-      # 12. CONFIGURE CLOUD MLFLOW
+      # 14. VERIFY DAGSHUB MLFLOW SECRETS
       # ============================================================
-      - name: Configure cloud MLflow
+      - name: Verify DagsHub MLflow secrets
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "============================================================"
-          echo "CONFIGURING CLOUD MLFLOW"
+          echo "VERIFYING DAGSHUB MLFLOW SECRETS"
           echo "============================================================"
 
           if [ -z "$MLFLOW_TRACKING_URI" ]; then
-            echo "ERROR: MLFLOW_TRACKING_URI secret is empty."
+            echo "ERROR: MLFLOW_TRACKING_URI is empty."
             exit 1
           fi
 
-          case "$MLFLOW_TRACKING_URI" in
-            http://*|https://*)
-              ;;
-            *)
-              echo "ERROR: MLFLOW_TRACKING_URI must be an HTTP/HTTPS URL."
-              exit 1
-              ;;
-          esac
+          if [ -z "$MLFLOW_TRACKING_USERNAME" ]; then
+            echo "ERROR: MLFLOW_TRACKING_USERNAME is empty."
+            exit 1
+          fi
 
-          echo "Cloud MLflow URI detected."
+          if [ -z "$MLFLOW_TRACKING_PASSWORD" ]; then
+            echo "ERROR: MLFLOW_TRACKING_PASSWORD is empty."
+            exit 1
+          fi
 
-          # Persist ONLY the cloud MLflow URI for later steps.
-          echo "MLFLOW_TRACKING_URI=$MLFLOW_TRACKING_URI" >> "$GITHUB_ENV"
+          echo "MLFLOW_TRACKING_URI: $MLFLOW_TRACKING_URI"
+          echo "MLFLOW_TRACKING_USERNAME: $MLFLOW_TRACKING_USERNAME"
+          echo "MLFLOW_TRACKING_PASSWORD: configured"
+
+          if [[ "$MLFLOW_TRACKING_URI" == sqlite:* ]]; then
+            echo "ERROR: SQLite MLflow is not allowed."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == file:* ]]; then
+            echo "ERROR: Local file MLflow is not allowed."
+            exit 1
+          fi
+
+          echo
+          echo "DagsHub MLflow secret verification PASSED."
 
       # ============================================================
-      # 13. VERIFY CLOUD MLFLOW CONNECTION
+      # 15. TEST DAGSHUB MLFLOW CONNECTION
       # ============================================================
-      - name: Verify cloud MLflow connection
+      - name: Test DagsHub MLflow connection
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "============================================================"
-          echo "VERIFYING CLOUD MLFLOW"
+          echo "TESTING DAGSHUB MLFLOW CONNECTION"
           echo "============================================================"
 
           python - <<'PY'
           import os
           import mlflow
 
-          tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+          mlflow.set_tracking_uri(
+              os.environ["MLFLOW_TRACKING_URI"]
+          )
 
-          if not tracking_uri:
-              raise SystemExit(
-                  "ERROR: MLFLOW_TRACKING_URI is not set."
-              )
+          mlflow.set_registry_uri(
+              os.environ["MLFLOW_TRACKING_URI"]
+          )
 
-          if tracking_uri.startswith("sqlite:"):
-              raise SystemExit(
-                  "ERROR: Cloud training is using SQLite MLflow."
-              )
-
-          if tracking_uri.startswith("file:"):
-              raise SystemExit(
-                  "ERROR: Cloud training is using local file MLflow."
-              )
-
-          mlflow.set_tracking_uri(tracking_uri)
-          mlflow.set_registry_uri(tracking_uri)
-
-          print("MLflow tracking URI:")
+          print("Tracking URI:")
           print(mlflow.get_tracking_uri())
 
           print()
-          print("MLflow registry URI:")
+          print("Registry URI:")
           print(mlflow.get_registry_uri())
 
-          if mlflow.get_tracking_uri() != tracking_uri:
-              raise SystemExit(
-                  "ERROR: MLflow tracking URI mismatch."
-              )
+          client = mlflow.MlflowClient()
+
+          experiments = client.search_experiments(
+              max_results=10
+          )
 
           print()
-          print("Cloud MLflow connection configuration PASSED.")
+          print("MLFLOW CONNECTION: OK")
+          print(
+              "Experiments accessible:",
+              len(experiments)
+          )
           PY
 
       # ============================================================
-      # 14. RUN TRAINING
+      # 16. RUN TRAINING
       # ============================================================
       - name: Run daily training pipeline
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "============================================================"
           echo "RUNNING AQI TRAINING"
@@ -550,6 +562,16 @@ jobs:
 
           if [ -z "$MLFLOW_TRACKING_URI" ]; then
             echo "ERROR: Cloud MLflow URI is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_USERNAME" ]; then
+            echo "ERROR: Cloud MLflow username is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_PASSWORD" ]; then
+            echo "ERROR: Cloud MLflow password is missing."
             exit 1
           fi
 
@@ -566,11 +588,13 @@ jobs:
           python src/models/train.py
 
       # ============================================================
-      # 15. VERIFY CHAMPION MODEL IN CLOUD MLFLOW
+      # 17. VERIFY CHAMPION MODEL IN CLOUD MLFLOW
       # ============================================================
       - name: Verify champion model
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "============================================================"
           echo "VERIFYING CHAMPION MODEL"
@@ -583,7 +607,9 @@ jobs:
           MODEL_NAME = "Pearls_AQI_XGBoost"
           MODEL_ALIAS = "champion"
 
-          tracking_uri = os.environ.get("MLFLOW_TRACKING_URI")
+          tracking_uri = os.environ.get(
+              "MLFLOW_TRACKING_URI"
+          )
 
           if not tracking_uri:
               raise SystemExit(
@@ -608,6 +634,10 @@ jobs:
           print("Tracking URI:")
           print(mlflow.get_tracking_uri())
 
+          print()
+          print("Registry URI:")
+          print(mlflow.get_registry_uri())
+
           try:
               model_version = client.get_model_version_by_alias(
                   MODEL_NAME,
@@ -615,7 +645,8 @@ jobs:
               )
           except Exception as exc:
               raise SystemExit(
-                  "ERROR: Champion model alias not found in cloud MLflow."
+                  "ERROR: Champion model alias not found "
+                  "in cloud MLflow."
               ) from exc
 
           print()
@@ -640,7 +671,7 @@ jobs:
           PY
 
       # ============================================================
-      # 16. VERIFY LOCAL CHAMPION ARTIFACTS
+      # 18. VERIFY LOCAL CHAMPION ARTIFACTS
       # ============================================================
       - name: Verify champion artifacts
         run: |
@@ -707,7 +738,7 @@ jobs:
           PY
 
       # ============================================================
-      # 17. UPLOAD ONLY CHAMPION ARTIFACTS
+      # 19. UPLOAD CHAMPION ARTIFACTS
       # ============================================================
       - name: Upload champion model artifacts
         uses: actions/upload-artifact@v4
@@ -720,7 +751,7 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 18. FINAL CLOUD SEPARATION CHECK
+      # 20. FINAL CLOUD SEPARATION CHECK
       # ============================================================
       - name: Final cloud separation check
         run: |
@@ -753,7 +784,7 @@ jobs:
           echo "CLOUD TRAINING PIPELINE PASSED"
           echo "============================================================"
           echo "Feast: Supabase/Postgres"
-          echo "MLflow: Cloud MLflow server"
+          echo "MLflow: DagsHub"
           echo "Training data: feature parquet artifact"
           echo "Model inputs: 70 features"
           echo "us_aqi: excluded from model inputs"
