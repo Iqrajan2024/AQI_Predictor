@@ -997,18 +997,23 @@ jobs:
           echo "Forecast files are present."
 
           echo
+          echo "Installing uv..."
+
+          python -m pip install uv
+
+          echo
           echo "Checking FastAPI CLI..."
 
-          fastapi --version
+          uv run fastapi --version
 
           echo
           echo "Deploying current workspace to FastAPI Cloud..."
 
-          fastapi deploy
+          uv run fastapi deploy
 
           echo
           echo "FastAPI Cloud deployment command completed."
- 
+          
       # ============================================================
       # 24. VERIFY ONLINE FASTAPI FORECAST
       # ============================================================
