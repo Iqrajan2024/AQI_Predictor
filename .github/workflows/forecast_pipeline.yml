@@ -127,21 +127,18 @@ jobs:
       # 7. DOWNLOAD FEATURE DATA
       # ============================================================
 
-      - name: Download feature pipeline artifact
+      - name: Download latest feature artifact
         env:
-          GH_TOKEN: ${{ github.token }}
+            GH_TOKEN: ${{ github.token }}
         run: |
+            rm -rf feature_artifact
 
-          rm -rf feature_artifact
-          mkdir -p feature_artifact
+            gh run download "$FEATURE_RUN_ID" \
+            -n aqi-pipeline-data \
+            -D feature_artifact
 
-          gh run download "$FEATURE_RUN_ID" \
-            --repo "${{ github.repository }}" \
-            --name "aqi-pipeline-data" \
-            --dir feature_artifact
-
-          echo "Downloaded files:"
-          find feature_artifact -type f -print
+            echo "Downloaded artifact:"
+            find feature_artifact -type f -print
 
 
       # ============================================================
@@ -151,19 +148,40 @@ jobs:
       - name: Restore feature dataset
         run: |
 
-          mkdir -p data/processed
+            echo "=========================================="
+            echo "INSPECTING DOWNLOADED FEATURE ARTIFACT"
+            echo "=========================================="
 
-          FEATURE_FILE="feature_artifact/data/processed/aqi_features.parquet"
+            echo "Current directory:"
+            pwd
 
-          if [ ! -f "$FEATURE_FILE" ]; then
-            echo "ERROR: Feature parquet not found."
+            echo ""
+            echo "Downloaded artifact contents:"
+            find feature_artifact -type f -print 2>/dev/null || true
+
+            echo ""
+            echo "Searching for aqi_features.parquet:"
+            find . -name "aqi_features.parquet" -type f -print
+
+            FEATURE_FILE=$(find feature_artifact -name "aqi_features.parquet" -type f | head -n 1)
+
+            if [ -z "$FEATURE_FILE" ]; then
+            echo "ERROR: aqi_features.parquet was not found anywhere inside feature_artifact."
             exit 1
-          fi
+            fi
 
-          cp "$FEATURE_FILE" \
-             data/processed/aqi_features.parquet
+            echo ""
+            echo "FOUND FEATURE FILE:"
+            echo "$FEATURE_FILE"
 
-          ls -lh data/processed/aqi_features.parquet
+            mkdir -p data/processed
+
+            cp "$FEATURE_FILE" data/processed/aqi_features.parquet
+
+            echo ""
+            echo "RESTORED FEATURE FILE:"
+            ls -lh data/processed/aqi_features.parquet
+
 
 
       # ============================================================
