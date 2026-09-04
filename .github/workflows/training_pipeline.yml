@@ -191,13 +191,30 @@ jobs:
 
           mkdir -p data/processed
 
-          FEATURE_FILE="feature_artifact/data/processed/aqi_features.parquet"
+          echo "Downloaded artifact structure:"
+          find feature_artifact -type f -print
 
-          if [ ! -f "$FEATURE_FILE" ]; then
-            echo "ERROR: Feature parquet not found:"
-            echo "$FEATURE_FILE"
+          echo
+          echo "Searching for aqi_features.parquet..."
+
+          FEATURE_FILE=$(find feature_artifact \
+            -type f \
+            -name "aqi_features.parquet" \
+            -print \
+            -quit)
+
+          if [ -z "$FEATURE_FILE" ]; then
+            echo
+            echo "ERROR: aqi_features.parquet was not found anywhere inside feature_artifact."
+            echo
+            echo "Available files:"
+            find feature_artifact -type f -print
             exit 1
           fi
+
+          echo
+          echo "Feature parquet found:"
+          echo "$FEATURE_FILE"
 
           cp "$FEATURE_FILE" data/processed/aqi_features.parquet
 
@@ -226,6 +243,7 @@ jobs:
           fi
 
           echo "OK: No local Feast databases found."
+         
 
       # ============================================================
       # 10. VERIFY FEATURE DATASET
