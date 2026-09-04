@@ -1,0 +1,364 @@
+name: Pearls AQI - Forecast Pipeline
+
+on:
+  workflow_run:
+    workflows:
+      - "Pearls AQI - Hourly Feature Pipeline"
+    types:
+      - completed
+
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: aqi-forecast-pipeline
+  cancel-in-progress: false
+
+jobs:
+
+  forecast:
+    name: Generate 72-Hour AQI Forecast
+
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'schedule'
+      )
+
+    runs-on: ubuntu-latest
+
+    env:
+      PYTHONUNBUFFERED: "1"
+
+    steps:
+
+      # ============================================================
+      # 1. CHECKOUT
+      # ============================================================
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+
+      # ============================================================
+      # 2. SETUP PYTHON
+      # ============================================================
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+
+      # ============================================================
+      # 3. INSTALL DEPENDENCIES
+      # ============================================================
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      # ============================================================
+      # 4. VERIFY FEAST DEPENDENCIES
+      # ============================================================
+
+      - name: Verify Feast dependencies
+        run: |
+          python -c "import feast; print('Feast:', feast.__version__)"
+          python -c "import ibis; print('Ibis:', ibis.__version__)"
+          python -c "import duckdb; print('DuckDB:', duckdb.__version__)"
+          python -c "import pyarrow; print('PyArrow:', pyarrow.__version__)"
+
+
+      # ============================================================
+      # 5. CONFIGURE CLOUD FEAST
+      # ============================================================
+
+      - name: Configure cloud Feast
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+          python scripts/configure_feast.py
+
+
+      # ============================================================
+      # 6. FIND LATEST SUCCESSFUL FEATURE PIPELINE
+      # ============================================================
+
+      - name: Find latest successful feature pipeline
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          REPO="${{ github.repository }}"
+
+          RUN_ID=$(gh run list \
+            --repo "$REPO" \
+            --workflow "feature_pipeline.yml" \
+            --status success \
+            --limit 1 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            echo "ERROR: No successful feature pipeline run found."
+            exit 1
+          fi
+
+          echo "Latest feature pipeline run: $RUN_ID"
+
+          echo "FEATURE_RUN_ID=$RUN_ID" >> "$GITHUB_ENV"
+
+
+      # ============================================================
+      # 7. DOWNLOAD FEATURE DATA
+      # ============================================================
+
+      - name: Download feature pipeline artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+
+          rm -rf feature_artifact
+          mkdir -p feature_artifact
+
+          gh run download "$FEATURE_RUN_ID" \
+            --repo "${{ github.repository }}" \
+            --name "aqi-pipeline-data" \
+            --dir feature_artifact
+
+          echo "Downloaded files:"
+          find feature_artifact -type f -print
+
+
+      # ============================================================
+      # 8. RESTORE FEATURE DATASET
+      # ============================================================
+
+      - name: Restore feature dataset
+        run: |
+
+          mkdir -p data/processed
+
+          FEATURE_FILE="feature_artifact/data/processed/aqi_features.parquet"
+
+          if [ ! -f "$FEATURE_FILE" ]; then
+            echo "ERROR: Feature parquet not found."
+            exit 1
+          fi
+
+          cp "$FEATURE_FILE" \
+             data/processed/aqi_features.parquet
+
+          ls -lh data/processed/aqi_features.parquet
+
+
+      # ============================================================
+      # 9. VERIFY NO LOCAL FEAST DATABASES
+      # ============================================================
+
+      - name: Remove local Feast databases
+        run: |
+
+          find . -type f \( \
+            -name "registry.db" \
+            -o -name "online_store.db" \
+          \) -print -delete
+
+
+      # ============================================================
+      # 10. APPLY CLOUD FEAST
+      # ============================================================
+
+      - name: Apply cloud Feast
+        working-directory: feature_repo/feature_repo
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+          feast apply
+
+
+      # ============================================================
+      # 11. MATERIALIZE CLOUD FEAST
+      # ============================================================
+
+      - name: Materialize cloud Feast
+        working-directory: feature_repo/feature_repo
+        env:
+          APP_ENV: cloud
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+        run: |
+
+          END_TS=$(python -c \
+            "from datetime import datetime, timezone; \
+            print(datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S'))")
+
+          echo "Materializing through: $END_TS"
+
+          feast materialize-incremental "$END_TS"
+
+
+      # ============================================================
+      # 12. GENERATE FORECAST
+      # ============================================================
+
+      - name: Generate 72-hour forecast
+        env:
+          APP_ENV: cloud
+
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+
+        run: |
+
+          echo "=============================================="
+          echo "GENERATING 72-HOUR AQI FORECAST"
+          echo "=============================================="
+
+          python src/prediction/predict.py
+
+          echo
+          echo "Forecast generation completed."
+
+
+      # ============================================================
+      # 13. VERIFY FORECAST FILES
+      # ============================================================
+
+      - name: Verify forecast files
+        run: |
+
+          echo "=============================================="
+          echo "VERIFYING FORECAST FILES"
+          echo "=============================================="
+
+          test -f data/predictions/latest_forecast.csv
+          test -f data/predictions/latest_daily_forecast.csv
+          test -f data/predictions/latest_forecast_features.csv
+
+          echo
+          echo "Forecast files:"
+          ls -lh data/predictions/
+
+
+      # ============================================================
+      # 14. VERIFY FORECAST CONTENT
+      # ============================================================
+
+      - name: Verify forecast content
+        run: |
+
+          python - <<'PY'
+
+          from pathlib import Path
+          import pandas as pd
+
+          hourly_path = Path(
+              "data/predictions/latest_forecast.csv"
+          )
+
+          daily_path = Path(
+              "data/predictions/latest_daily_forecast.csv"
+          )
+
+          hourly = pd.read_csv(hourly_path)
+          daily = pd.read_csv(daily_path)
+
+          print("Hourly forecast rows:", len(hourly))
+          print("Daily forecast rows:", len(daily))
+
+          if len(hourly) != 72:
+              raise SystemExit(
+                  f"ERROR: Expected 72 hourly predictions, "
+                  f"got {len(hourly)}"
+              )
+
+          if len(daily) != 3:
+              raise SystemExit(
+                  f"ERROR: Expected 3 daily predictions, "
+                  f"got {len(daily)}"
+              )
+
+          print()
+          print("Hourly forecast:")
+          print(hourly.head())
+          print(hourly.tail())
+
+          print()
+          print("Daily forecast:")
+          print(daily)
+
+          print()
+          print("FORECAST CONTENT VERIFIED")
+
+          PY
+
+
+      # ============================================================
+      # 15. UPLOAD FORECAST ARTIFACT
+      # ============================================================
+
+      - name: Upload forecast artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqi-latest-forecast
+          path: |
+            data/predictions/latest_forecast.csv
+            data/predictions/latest_daily_forecast.csv
+            data/predictions/latest_forecast_features.csv
+          retention-days: 7
+          overwrite: true
+          if-no-files-found: error
+
+
+      # ============================================================
+      # 16. FINAL CHECK
+      # ============================================================
+
+      - name: Forecast pipeline completed
+        run: |
+
+          echo "============================================================"
+          echo "AQI FORECAST PIPELINE PASSED"
+          echo "============================================================"
+          echo "Forecast horizon: 72 hours"
+          echo "Forecast days: 3"
+          echo "Recursive AQI prediction: ENABLED"
+          echo "Feast: Supabase/Postgres"
+          echo "MLflow: DagsHub"
+          echo "============================================================"
