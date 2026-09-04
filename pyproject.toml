@@ -37,3 +37,8 @@ packages = ["src/api"]
 
 [tool.fastapi]
 entrypoint = "src.api.main:app"
+
+[tool.uv]
+environments = [
+    "sys_platform == 'linux' and platform_machine == 'x86_64'"
+]
