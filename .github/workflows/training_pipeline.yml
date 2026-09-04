@@ -738,7 +738,190 @@ jobs:
           PY
 
       # ============================================================
-      # 19. UPLOAD CHAMPION ARTIFACTS
+      # 19. RUN 72-HOUR FORECAST
+      # ============================================================
+      - name: Run 72-hour AQI forecast
+        env:
+          APP_ENV: cloud
+
+          FEAST_POSTGRES_HOST: ${{ secrets.FEAST_POSTGRES_HOST }}
+          FEAST_POSTGRES_PORT: ${{ secrets.FEAST_POSTGRES_PORT }}
+          FEAST_POSTGRES_DATABASE: ${{ secrets.FEAST_POSTGRES_DATABASE }}
+          FEAST_POSTGRES_SCHEMA: ${{ secrets.FEAST_POSTGRES_SCHEMA }}
+          FEAST_POSTGRES_USER: ${{ secrets.FEAST_POSTGRES_USER }}
+          FEAST_POSTGRES_PASSWORD: ${{ secrets.FEAST_POSTGRES_PASSWORD }}
+          FEAST_POSTGRES_SSLMODE: ${{ secrets.FEAST_POSTGRES_SSLMODE }}
+
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+
+          MLFLOW_MODEL_URI: "models:/Pearls_AQI_XGBoost@champion"
+
+        run: |
+          echo "============================================================"
+          echo "RUNNING 72-HOUR AQI FORECAST"
+          echo "============================================================"
+
+          if [ -z "$FEAST_POSTGRES_HOST" ]; then
+            echo "ERROR: FEAST_POSTGRES_HOST is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_PORT" ]; then
+            echo "ERROR: FEAST_POSTGRES_PORT is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_DATABASE" ]; then
+            echo "ERROR: FEAST_POSTGRES_DATABASE is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_SCHEMA" ]; then
+            echo "ERROR: FEAST_POSTGRES_SCHEMA is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_USER" ]; then
+            echo "ERROR: FEAST_POSTGRES_USER is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_PASSWORD" ]; then
+            echo "ERROR: FEAST_POSTGRES_PASSWORD is missing."
+            exit 1
+          fi
+
+          if [ -z "$FEAST_POSTGRES_SSLMODE" ]; then
+            echo "ERROR: FEAST_POSTGRES_SSLMODE is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_URI" ]; then
+            echo "ERROR: MLFLOW_TRACKING_URI is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_USERNAME" ]; then
+            echo "ERROR: MLFLOW_TRACKING_USERNAME is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_PASSWORD" ]; then
+            echo "ERROR: MLFLOW_TRACKING_PASSWORD is missing."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == sqlite:* ]]; then
+            echo "ERROR: Forecast attempted to use local SQLite MLflow."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == file:* ]]; then
+            echo "ERROR: Forecast attempted to use local file MLflow."
+            exit 1
+          fi
+
+          python src/prediction/predict.py
+
+      # ============================================================
+      # 20. VERIFY FORECAST OUTPUTS
+      # ============================================================
+      - name: Verify forecast outputs
+        run: |
+          echo "============================================================"
+          echo "VERIFYING FORECAST OUTPUTS"
+          echo "============================================================"
+
+          test -f data/predictions/latest_forecast.csv
+          test -f data/predictions/latest_daily_forecast.csv
+          test -f data/predictions/latest_forecast_features.csv
+
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+
+          hourly_path = Path(
+              "data/predictions/latest_forecast.csv"
+          )
+
+          daily_path = Path(
+              "data/predictions/latest_daily_forecast.csv"
+          )
+
+          feature_path = Path(
+              "data/predictions/latest_forecast_features.csv"
+          )
+
+          if not hourly_path.exists():
+              raise SystemExit(
+                  "ERROR: latest_forecast.csv was not generated."
+              )
+
+          if not daily_path.exists():
+              raise SystemExit(
+                  "ERROR: latest_daily_forecast.csv was not generated."
+              )
+
+          if not feature_path.exists():
+              raise SystemExit(
+                  "ERROR: latest_forecast_features.csv was not generated."
+              )
+
+          hourly = pd.read_csv(hourly_path)
+          daily = pd.read_csv(daily_path)
+          features = pd.read_csv(feature_path)
+
+          print()
+          print("Hourly forecast:")
+          print("Rows:", len(hourly))
+          print("Columns:", len(hourly.columns))
+
+          print()
+          print("Daily forecast:")
+          print("Rows:", len(daily))
+          print("Columns:", len(daily.columns))
+
+          print()
+          print("Forecast feature data:")
+          print("Rows:", len(features))
+          print("Columns:", len(features.columns))
+
+          if len(hourly) != 72:
+              raise SystemExit(
+                  f"ERROR: Expected 72 hourly forecast rows, "
+                  f"got {len(hourly)}"
+              )
+
+          if len(daily) != 3:
+              raise SystemExit(
+                  f"ERROR: Expected 3 daily forecast rows, "
+                  f"got {len(daily)}"
+              )
+
+          if hourly.empty:
+              raise SystemExit(
+                  "ERROR: Hourly forecast is empty."
+              )
+
+          if daily.empty:
+              raise SystemExit(
+                  "ERROR: Daily forecast is empty."
+              )
+
+          print()
+          print("72-hour forecast verification PASSED.")
+          PY
+
+          echo
+          echo "Generated forecast files:"
+          ls -lh data/predictions/latest_forecast.csv
+          ls -lh data/predictions/latest_daily_forecast.csv
+          ls -lh data/predictions/latest_forecast_features.csv
+
+      # ============================================================
+      # 21. UPLOAD CHAMPION ARTIFACTS
       # ============================================================
       - name: Upload champion model artifacts
         uses: actions/upload-artifact@v4
@@ -751,7 +934,21 @@ jobs:
           retention-days: 30
 
       # ============================================================
-      # 20. FINAL CLOUD SEPARATION CHECK
+      # 22. UPLOAD FORECAST ARTIFACTS
+      # ============================================================
+      - name: Upload latest forecast artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqi-latest-forecast
+          path: |
+            data/predictions/latest_forecast.csv
+            data/predictions/latest_daily_forecast.csv
+            data/predictions/latest_forecast_features.csv
+          if-no-files-found: error
+          retention-days: 7
+
+      # ============================================================
+      # 23. FINAL CLOUD SEPARATION CHECK
       # ============================================================
       - name: Final cloud separation check
         run: |
@@ -781,7 +978,7 @@ jobs:
 
           echo
           echo "============================================================"
-          echo "CLOUD TRAINING PIPELINE PASSED"
+          echo "CLOUD TRAINING + FORECAST PIPELINE PASSED"
           echo "============================================================"
           echo "Feast: Supabase/Postgres"
           echo "MLflow: DagsHub"
@@ -790,6 +987,9 @@ jobs:
           echo "us_aqi: excluded from model inputs"
           echo "target_aqi: training target only"
           echo "Champion: cloud MLflow alias"
+          echo "Forecast: 72 hourly predictions"
+          echo "Daily forecast: 3 calendar days"
+          echo "Forecast artifacts: uploaded"
           echo "Local Feast DB restoration: DISABLED"
           echo "Local MLflow restoration: DISABLED"
           echo "============================================================"
