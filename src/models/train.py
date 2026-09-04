@@ -1173,7 +1173,7 @@ def train():
         filter_string=f"source_run_id = '{winner_run_id}'"
     )
 
-    if not logged_models:
+    if logged_models.empty:
         raise RuntimeError(
             f"No MLflow LoggedModel found for winner run: "
             f"{winner_run_id}"
@@ -1181,7 +1181,7 @@ def train():
 
     # The winning run contains exactly one model because
     # each candidate logs its model with name="model".
-    winner_logged_model = logged_models[0]
+    winner_logged_model = logged_models.iloc[0]
 
     print(
         "Winner LoggedModel ID:",
