@@ -1188,13 +1188,17 @@ def train():
         winner_logged_model.model_id,
     )
 
+    logged_model_uri = (
+        f"models:/{winner_logged_model.model_id}"
+    )
+
     print(
         "Winner LoggedModel URI:",
-        winner_logged_model.model_uri,
+        logged_model_uri,
     )
 
     registered = mlflow.register_model(
-        model_uri=winner_logged_model.model_uri,
+        model_uri=logged_model_uri,
         name=MODEL_NAME,
     )
 
