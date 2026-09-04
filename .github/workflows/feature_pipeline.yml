@@ -35,8 +35,16 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install pandas pyarrow requests pytest "feast[duckdb]==0.66.0" duckdb
-      
+          pip install pandas pyarrow requests pytest "feast[duckdb]==0.66.0" duckdb "psycopg==3.3.3" "psycopg-binary==3.3.3" "psycopg-pool==3.3.1" "SQLAlchemy==2.0.36"
+      - name: Verify Feast dependencies
+        run: |
+          python -c "import feast; print('Feast:', feast.__version__)"
+          python -c "import psycopg; print('psycopg:', psycopg.__version__)"
+          python -c "import duckdb; print('DuckDB:', duckdb.__version__)"
+          python -c "import pyarrow; print('PyArrow:', pyarrow.__version__)"
+          python -c "import ibis; print('Ibis:', ibis.__version__)"
+          python -c "import ibis.backends.duckdb; print('Ibis DuckDB backend: OK')"
+          
       - name: Configure cloud Feast
         env:
           APP_ENV: cloud
