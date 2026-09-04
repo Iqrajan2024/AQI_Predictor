@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 import requests
 import shap
+from feast import FeatureStore
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -50,19 +51,146 @@ FORECAST_FEATURES_FILE = (
 
 
 # ============================================================
-# MLflow
+# ENVIRONMENT
 # ============================================================
 
-MLFLOW_TRACKING_URI = os.getenv(
+APP_ENV = os.getenv(
+    "APP_ENV",
+    "local",
+).strip().lower()
+
+if APP_ENV not in {"local", "cloud"}:
+    raise RuntimeError(
+        "APP_ENV must be either 'local' or 'cloud'."
+    )
+
+# ============================================================
+# CLOUD MLflow CONFIGURATION
+# ============================================================
+
+MLFLOW_TRACKING_URI = os.environ.get(
     "MLFLOW_TRACKING_URI",
     "http://127.0.0.1:5000",
 )
 
-MLFLOW_MODEL_URI = os.getenv(
-    "MLFLOW_MODEL_URI",
-    "models:/Pearls_AQI_XGBoost@champion",
+MLFLOW_MODEL_NAME = os.environ.get(
+    "MLFLOW_MODEL_NAME",
+    "Pearls_AQI_XGBoost",
 )
 
+MLFLOW_MODEL_ALIAS = os.environ.get(
+    "MLFLOW_MODEL_ALIAS",
+    "champion",
+)
+
+MLFLOW_MODEL_URI = os.environ.get(
+    "MLFLOW_MODEL_URI",
+    f"models:/{MLFLOW_MODEL_NAME}@{MLFLOW_MODEL_ALIAS}",
+)
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+mlflow.set_registry_uri(MLFLOW_TRACKING_URI)
+
+# ============================================================
+# FEAST CONFIGURATION
+# ============================================================
+
+def load_feast():
+    """
+    Load Feast using the cloud PostgreSQL online store.
+
+    Local Feast repository is used only when the required
+    cloud Feast environment variables are not available.
+    """
+
+    required_vars = [
+        "FEAST_POSTGRES_HOST",
+        "FEAST_POSTGRES_PORT",
+        "FEAST_POSTGRES_DATABASE",
+        "FEAST_POSTGRES_SCHEMA",
+        "FEAST_POSTGRES_USER",
+        "FEAST_POSTGRES_PASSWORD",
+    ]
+
+    cloud_configured = all(
+        os.environ.get(var)
+        for var in required_vars
+    )
+
+    if cloud_configured:
+        print("Using CLOUD Feast configuration")
+
+        from urllib.parse import quote_plus
+
+        postgres_host = os.environ["FEAST_POSTGRES_HOST"]
+        postgres_port = os.environ.get(
+            "FEAST_POSTGRES_PORT",
+            "5432",
+        )
+        postgres_database = os.environ[
+            "FEAST_POSTGRES_DATABASE"
+        ]
+        postgres_schema = os.environ[
+            "FEAST_POSTGRES_SCHEMA"
+        ]
+        postgres_user = os.environ[
+            "FEAST_POSTGRES_USER"
+        ]
+        postgres_password = os.environ[
+            "FEAST_POSTGRES_PASSWORD"
+        ]
+        sslmode = os.environ.get(
+            "FEAST_POSTGRES_SSLMODE",
+            "require",
+        )
+
+        registry_url = (
+            "postgresql+psycopg://"
+            f"{quote_plus(postgres_user)}:"
+            f"{quote_plus(postgres_password)}@"
+            f"{postgres_host}:"
+            f"{postgres_port}/"
+            f"{postgres_database}"
+            f"?sslmode={sslmode}"
+            "&options=-csearch_path%3D"
+            f"{quote_plus(postgres_schema)}"
+        )
+
+        feast_config = {
+            "registry": registry_url,
+            "project": "pearls_aqi",
+            "provider": "local",
+            "online_store": {
+                "type": "postgres",
+                "host": postgres_host,
+                "port": int(postgres_port),
+                "database": postgres_database,
+                "db_schema": postgres_schema,
+                "user": postgres_user,
+                "password": postgres_password,
+                "sslmode": sslmode,
+            },
+        }
+
+        return FeatureStore(
+            config=feast_config
+        )
+
+    # --------------------------------------------------------
+    # LOCAL FALLBACK
+    # --------------------------------------------------------
+
+    print("Using LOCAL Feast configuration")
+
+    feature_repo = (
+        PROJECT_ROOT
+        / "feature_repo"
+        / "feature_repo"
+    )
+
+    return FeatureStore(
+        repo_path=str(feature_repo)
+    )
 
 # ============================================================
 # LOCATION
@@ -1542,33 +1670,23 @@ def dashboard():
 @app.get("/health")
 def health():
 
+    feast_cloud_configured = all(
+        os.environ.get(var)
+        for var in [
+            "FEAST_POSTGRES_HOST",
+            "FEAST_POSTGRES_PORT",
+            "FEAST_POSTGRES_DATABASE",
+            "FEAST_POSTGRES_SCHEMA",
+            "FEAST_POSTGRES_USER",
+            "FEAST_POSTGRES_PASSWORD",
+        ]
+    )
+
     return {
-
         "status": "healthy",
-
-        "service":
-            "Pearls AQI Predictor API",
-
-        "location":
-            LOCATION_ID,
-
-        "forecast_hours":
-            72,
-
-        "forecast_days":
-            3,
-
-        "forecast_features_exists":
-            FORECAST_FEATURES_FILE.exists(),
-
-        "hourly_forecast_exists":
-            HOURLY_FORECAST_FILE.exists(),
-
-        "daily_forecast_exists":
-            DAILY_FORECAST_FILE.exists(),
-
-        "timestamp":
-            datetime.now(
-                timezone.utc
-            ).isoformat(),
+        "service": "Pearls AQI Predictor API",
+        "environment": APP_ENV,
+        "feast": {
+            "enabled": feast_cloud_configured,
+        },
     }

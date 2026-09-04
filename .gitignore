@@ -46,9 +46,6 @@ Thumbs.db
 # VS Code
 .vscode/
 
-# Prediction outputs
-data/predictions/
-
 # Feast local stores
 feature_repo/feature_repo/data/*.dbmodels/random_forest_aqi.pkl
 models/random_forest_aqi.pkl
