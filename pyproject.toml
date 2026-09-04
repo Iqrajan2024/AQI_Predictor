@@ -4,7 +4,7 @@ version = "1.0.0"
 description = "Pearls AQI Predictor API"
 requires-python = ">=3.13,<3.15"
 dependencies = [
-    "fastapi==0.141.1",
+    "fastapi[standard]==0.141.1",
     "uvicorn==0.34.0",
     "numpy==2.4.2",
     "pandas==2.3.3",
