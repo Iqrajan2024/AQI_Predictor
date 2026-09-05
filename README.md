@@ -287,8 +287,8 @@ The deployed system provides a practical interface for monitoring current air qu
 
 ### Live Demo
 
-👉 https://aqi-predictor-axaefuyojztztpjgazhdcq.streamlit.app/
+ https://aqi-predictor-axaefuyojztztpjgazhdcq.streamlit.app/
 
 ### Repository
 
-👉 https://github.com/Iqrajan2024/AQI_Predictor
+ https://github.com/Iqrajan2024/AQI_Predictor
