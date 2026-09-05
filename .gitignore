@@ -47,7 +47,7 @@ Thumbs.db
 .vscode/
 
 # Feast local stores
-feature_repo/feature_repo/data/*.dbmodels/random_forest_aqi.pkl
+feature_repo/feature_repo/data/*.db
 models/random_forest_aqi.pkl
 
 # Generated Feast configuration
@@ -58,3 +58,6 @@ feature_repo/feature_repo/data/registry.db
 feature_repo/feature_repo/data/online_store.db
 
 .streamlit/secrets.toml
+dist/
+build/
+*.egg-info/
