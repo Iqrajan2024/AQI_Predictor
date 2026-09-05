@@ -95,25 +95,6 @@ CONFIGURED_API_URL = CONFIGURED_API_URL.rstrip("/")
 
 
 # ============================================================
-# EVALUATION FILES
-# ============================================================
-
-EVALUATION_SUMMARY_FILE = (
-    Path(__file__).resolve().parents[2]
-    / "data"
-    / "evaluation"
-    / "historical_72h_summary.json"
-)
-
-EVALUATION_DAILY_METRICS_FILE = (
-    Path(__file__).resolve().parents[2]
-    / "data"
-    / "evaluation"
-    / "historical_72h_daily_metrics.csv"
-)
-
-
-# ============================================================
 # MLFLOW CONFIGURATION
 # ============================================================
 
@@ -375,75 +356,101 @@ def api_get(endpoint: str, timeout: int = 45) -> Any:
             f"FastAPI returned invalid JSON from {url}."
         ) from exc
 
-def get_daily_rmse_vs_persistence() -> dict[int, float]:
-    """
-    Load day-by-day RMSE improvement versus persistence
-    from the historical 72-hour evaluation CSV.
 
-    Returns:
-        {
-            1: Day 1 improvement percentage,
-            2: Day 2 improvement percentage,
-            3: Day 3 improvement percentage,
-        }
+# ============================================================
+# GET DAY 1 / DAY 2 / DAY 3 METRICS FROM ONLINE MLFLOW
+# ============================================================
 
-    Positive = champion model has lower/better RMSE
-    than persistence.
-    """
+@st.cache_data(
+    ttl=60,
+    show_spinner=False,
+)
+def get_online_daily_metrics() -> dict[int, dict]:
 
     try:
 
-        if not EVALUATION_DAILY_METRICS_FILE.exists():
-            return {}
-
-        daily_df = pd.read_csv(
-            EVALUATION_DAILY_METRICS_FILE
+        client = MlflowClient(
+            tracking_uri=MLFLOW_TRACKING_URI,
+            registry_uri=MLFLOW_TRACKING_URI,
         )
 
-        if daily_df.empty:
-            return {}
+        # --------------------------------------------------------
+        # ALWAYS FOLLOW THE CURRENT CHAMPION ALIAS
+        # --------------------------------------------------------
 
-        results = {}
-
-        for _, row in daily_df.iterrows():
-
-            lead_hours = str(
-                row.get("lead_hours", "")
-            ).strip()
-
-            improvement = row.get(
-                "rmse_improvement_percent"
+        model_version = (
+            client.get_model_version_by_alias(
+                name=MLFLOW_MODEL_NAME,
+                alias=MLFLOW_MODEL_ALIAS,
             )
+        )
 
-            if pd.isna(improvement):
-                continue
+        run_id = model_version.run_id
 
-            # Map lead-hour ranges to forecast days.
-            if lead_hours == "1-24":
-                day_number = 1
+        # --------------------------------------------------------
+        # GET THE ACTUAL CHAMPION RUN
+        # --------------------------------------------------------
 
-            elif lead_hours == "25-48":
-                day_number = 2
+        run = client.get_run(run_id)
 
-            elif lead_hours == "49-72":
-                day_number = 3
+        metrics = run.data.metrics
 
-            else:
-                continue
+        # --------------------------------------------------------
+        # BUILD DAY 1 / DAY 2 / DAY 3
+        # --------------------------------------------------------
 
-            results[day_number] = float(
-                improvement
-            )
+        daily = {}
 
-        return results
+        for day in [1, 2, 3]:
 
-    except (
-        OSError,
-        ValueError,
-        TypeError,
-        KeyError,
-    ):
-        return {}
+            daily[day] = {
+                "rmse": metrics.get(
+                    f"day{day}_rmse"
+                ),
+
+                "mae": metrics.get(
+                    f"day{day}_mae"
+                ),
+
+                "r2": metrics.get(
+                    f"day{day}_r2"
+                ),
+
+                "persistence_rmse": metrics.get(
+                    f"day{day}_persistence_rmse"
+                ),
+
+                "persistence_mae": metrics.get(
+                    f"day{day}_persistence_mae"
+                ),
+
+                "persistence_r2": metrics.get(
+                    f"day{day}_persistence_r2"
+                ),
+
+                "rmse_improvement": metrics.get(
+                    f"day{day}_rmse_improvement_vs_persistence_pct"
+                ),
+
+                "mae_improvement": metrics.get(
+                    f"day{day}_mae_improvement_vs_persistence_pct"
+                ),
+            }
+
+        return {
+            "version": str(model_version.version),
+            "run_id": run_id,
+            "days": daily,
+        }
+
+    except Exception as exc:
+
+        return {
+            "error": str(exc),
+            "version": "N/A",
+            "run_id": None,
+            "days": {},
+        }
 
 
 @st.cache_data(
@@ -1024,7 +1031,7 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
 # GET CURRENT CHAMPION MODEL INFORMATION
 # ============================================================
 
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=60, show_spinner=False)
 def get_champion_model_info() -> dict:
     try:
         client = MlflowClient(
@@ -1039,20 +1046,111 @@ def get_champion_model_info() -> dict:
             )
         )
 
+        run = client.get_run(
+            model_version.run_id
+        )
+
+        metrics = dict(run.data.metrics)
+
         return {
             "name": model_version.name,
             "version": str(model_version.version),
             "alias": MLFLOW_MODEL_ALIAS,
+            "run_id": model_version.run_id,
+            "metrics": metrics,
             "status": "Connected",
         }
 
-    except Exception:
+    except Exception as exc:
         return {
             "name": MLFLOW_MODEL_NAME,
             "version": "N/A",
             "alias": MLFLOW_MODEL_ALIAS,
+            "run_id": None,
+            "metrics": {},
+            "status": "Unavailable",
             "error": str(exc),
         }
+
+# ============================================================
+# EXTRACT DAY 1 / DAY 2 / DAY 3 METRICS FROM MLFLOW
+# ============================================================
+
+def get_day_metric(
+    metrics: dict,
+    day_number: int,
+    metric_name: str,
+):
+    """
+    Retrieve a day-specific metric from MLflow.
+
+    Supports several reasonable naming conventions so the
+    dashboard does not depend on one exact naming style.
+    """
+
+    candidates = [
+        f"day{day_number}_{metric_name}",
+        f"day_{day_number}_{metric_name}",
+        f"day{day_number}_test_{metric_name}",
+        f"day_{day_number}_test_{metric_name}",
+        f"test_day{day_number}_{metric_name}",
+        f"test_day_{day_number}_{metric_name}",
+        f"day{day_number}_xgb_{metric_name}",
+        f"day_{day_number}_xgb_{metric_name}",
+        f"xgb_day{day_number}_{metric_name}",
+        f"xgb_day_{day_number}_{metric_name}",
+    ]
+
+    for key in candidates:
+
+        if key in metrics:
+
+            value = metrics[key]
+
+            if value is not None:
+
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+
+    return None
+
+
+def get_day_persistence_improvement(
+    metrics: dict,
+    day_number: int,
+):
+    """
+    Retrieve day-specific RMSE improvement versus persistence
+    from the online MLflow run.
+    """
+
+    candidates = [
+        f"day{day_number}_rmse_improvement_vs_persistence_pct",
+        f"day_{day_number}_rmse_improvement_vs_persistence_pct",
+        f"day{day_number}_rmse_improvement_percent",
+        f"day_{day_number}_rmse_improvement_percent",
+        f"rmse_improvement_vs_persistence_day{day_number}",
+        f"rmse_improvement_vs_persistence_day_{day_number}",
+        f"day{day_number}_rmse_vs_persistence_improvement_pct",
+        f"day_{day_number}_rmse_vs_persistence_improvement_pct",
+    ]
+
+    for key in candidates:
+
+        if key in metrics:
+
+            value = metrics[key]
+
+            if value is not None:
+
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+
+    return None
     
 # ============================================================
 # SIDEBAR
@@ -1113,89 +1211,76 @@ with st.sidebar:
 
     st.markdown("---")
 
+    
     # ------------------------------------------------------------
     # MODEL PERFORMANCE
     # ------------------------------------------------------------
 
     st.subheader("**72-Hour Forecast Performance**")
 
-    daily_metrics = get_daily_rmse_vs_persistence()
-
-    # Load detailed daily metrics
-    try:
-        daily_metrics_df = pd.read_csv(
-            EVALUATION_DAILY_METRICS_FILE
-        )
-    except Exception:
-        daily_metrics_df = pd.DataFrame()
+    champion_metrics = champion_info.get(
+        "metrics",
+        {},
+    )
 
     for day_number in [1, 2, 3]:
 
-        day_label = f"Day {day_number}"
+        st.markdown(
+            f"**Day {day_number}**"
+        )
 
-        if not daily_metrics_df.empty:
+        day_rmse = get_day_metric(
+            champion_metrics,
+            day_number,
+            "rmse",
+        )
 
-            if day_number == 1:
-                lead_hours = "1-24"
-            elif day_number == 2:
-                lead_hours = "25-48"
-            else:
-                lead_hours = "49-72"
+        day_mae = get_day_metric(
+            champion_metrics,
+            day_number,
+            "mae",
+        )
 
-            day_row = daily_metrics_df[
-                daily_metrics_df["lead_hours"].astype(str)
-                == lead_hours
-            ]
+        day_r2 = get_day_metric(
+            champion_metrics,
+            day_number,
+            "r2",
+        )
 
-            if not day_row.empty:
+        col1, col2, col3 = st.columns(3)
 
-                row = day_row.iloc[0]
+        with col1:
 
-                rmse = row.get("xgb_rmse")
-                mae = row.get("xgb_mae")
-                r2 = row.get("xgb_r2")
+            st.metric(
+                "RMSE",
+                (
+                    f"{day_rmse:.2f}"
+                    if day_rmse is not None
+                    else "N/A"
+                ),
+            )
 
-                st.markdown(f"**{day_label}**")
+        with col2:
 
-                col1, col2, col3 = st.columns(3)
+            st.metric(
+                "MAE",
+                (
+                    f"{day_mae:.2f}"
+                    if day_mae is not None
+                    else "N/A"
+                ),
+            )
 
-                with col1:
-                    st.metric(
-                        "RMSE",
-                        (
-                            f"{float(rmse):.2f}"
-                            if pd.notna(rmse)
-                            else "N/A"
-                        ),
-                    )
+        with col3:
 
-                with col2:
-                    st.metric(
-                        "MAE",
-                        (
-                            f"{float(mae):.2f}"
-                            if pd.notna(mae)
-                            else "N/A"
-                        ),
-                    )
-
-                with col3:
-                    st.metric(
-                        "R²",
-                        (
-                            f"{float(r2):.3f}"
-                            if pd.notna(r2)
-                            else "N/A"
-                        ),
-                    )
-
-            else:
-                st.markdown(f"**{day_label}**")
-                st.caption("Metrics unavailable.")
-
-        else:
-            st.markdown(f"**{day_label}**")
-            st.caption("Metrics unavailable.")
+            st.metric(
+                "R²",
+                (
+                    f"{day_r2:.3f}"
+                    if day_r2 is not None
+                    else "N/A"
+                ),
+            )
 
     st.markdown("---")
 
@@ -1383,9 +1468,7 @@ st.divider()
 
 st.subheader("Next 3-Day AQI Forecast for Peshawar")
 
-daily_rmse_vs_persistence = (
-    get_daily_rmse_vs_persistence()
-)
+online_metrics = get_online_daily_metrics()
 
 forecast_days = normalize_forecast_days(forecast)
 
@@ -1510,7 +1593,10 @@ else:
                 day_number = item["day_number"]
 
                 rmse_vs_persistence = (
-                    daily_rmse_vs_persistence.get(day_number)
+                    get_day_persistence_improvement(
+                        champion_info.get("metrics", {}),
+                        day_number,
+                    )
                 )
 
                 if rmse_vs_persistence is None:
@@ -1518,8 +1604,12 @@ else:
                     st.metric(
                         label="Champion RMSE vs Persistence",
                         value="N/A",
-                        delta=None,
                         border=True,
+                        help=(
+                            "Day-specific RMSE improvement versus the "
+                            "persistence baseline, retrieved from the "
+                            "current champion MLflow run."
+                        ),
                     )
 
                 else:
@@ -1527,13 +1617,11 @@ else:
                     st.metric(
                         label="Champion RMSE vs Persistence",
                         value=f"{rmse_vs_persistence:+.2f}%",
-                        delta=None,
                         border=True,
                         help=(
                             "Percentage improvement in RMSE compared with "
-                            "the fixed-origin persistence forecast for this "
-                            "forecast day. Positive means the champion model "
-                            "has lower RMSE."
+                            "the persistence forecast for this forecast day. "
+                            "Positive means the champion model has lower RMSE."
                         ),
                     )
 

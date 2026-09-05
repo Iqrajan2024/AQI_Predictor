@@ -1,6 +1,10 @@
 from pathlib import Path
 import json
 import warnings
+import os
+
+import mlflow
+from mlflow import MlflowClient
 
 import joblib
 import numpy as np
@@ -65,6 +69,16 @@ HISTORY_HOURS = 96
 
 TIMESTAMP_COLUMN = "timestamp"
 TARGET_COLUMN = "us_aqi"
+
+# ============================================================
+# MLFLOW
+# ============================================================
+
+MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
+MLFLOW_MODEL_ALIAS = "champion"
+
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
+MLFLOW_REGISTRY_URI = MLFLOW_TRACKING_URI
 
 
 # ============================================================
@@ -899,6 +913,174 @@ def calculate_metrics(
 
     return rmse, mae, r2
 
+# ============================================================
+# LOG DAY 1 / DAY 2 / DAY 3 METRICS TO CHAMPION MLFLOW RUN
+# ============================================================
+
+def log_daily_metrics_to_mlflow(
+    daily_results,
+):
+    """
+    Log the already-calculated Day 1 / Day 2 / Day 3
+    evaluation metrics to the MLflow run associated
+    with the current champion model.
+
+    IMPORTANT:
+    This does NOT retrain the model.
+
+    It attaches the historical evaluation metrics
+    calculated by this script to the existing champion
+    MLflow run.
+    """
+
+    print()
+    print("=" * 70)
+    print("LOGGING DAILY METRICS TO MLFLOW")
+    print("=" * 70)
+
+    client = MlflowClient(
+        tracking_uri=MLFLOW_TRACKING_URI,
+        registry_uri=MLFLOW_REGISTRY_URI,
+    )
+
+    # --------------------------------------------------------
+    # Get the model currently assigned to champion
+    # --------------------------------------------------------
+
+    model_version = (
+        client.get_model_version_by_alias(
+            name=MLFLOW_MODEL_NAME,
+            alias=MLFLOW_MODEL_ALIAS,
+        )
+    )
+
+    run_id = model_version.run_id
+
+    print(
+        "Model:",
+        model_version.name,
+    )
+
+    print(
+        "Champion version:",
+        model_version.version,
+    )
+
+    print(
+        "Run ID:",
+        run_id,
+    )
+
+    # --------------------------------------------------------
+    # Safety check
+    # --------------------------------------------------------
+
+    if not run_id:
+        raise ValueError(
+            "Champion model has no associated MLflow run ID."
+        )
+
+    # --------------------------------------------------------
+    # Log Day 1 / Day 2 / Day 3
+    # --------------------------------------------------------
+
+    for _, row in daily_results.iterrows():
+
+        day = int(row["day"])
+
+        # -----------------------------------------------
+        # Validate day
+        # -----------------------------------------------
+
+        if day not in [1, 2, 3]:
+            raise ValueError(
+                f"Unexpected day value: {day}"
+            )
+
+        # -----------------------------------------------
+        # Metrics
+        # -----------------------------------------------
+
+        metrics = {
+            f"day{day}_rmse":
+                float(row["xgb_rmse"]),
+
+            f"day{day}_mae":
+                float(row["xgb_mae"]),
+
+            f"day{day}_r2":
+                float(row["xgb_r2"]),
+
+            f"day{day}_persistence_rmse":
+                float(row["persistence_rmse"]),
+
+            f"day{day}_persistence_mae":
+                float(row["persistence_mae"]),
+
+            f"day{day}_persistence_r2":
+                float(row["persistence_r2"]),
+
+            f"day{day}_rmse_improvement_vs_persistence_pct":
+                float(row["rmse_improvement_percent"]),
+
+            f"day{day}_mae_improvement_vs_persistence_pct":
+                float(row["mae_improvement_percent"]),
+        }
+
+        # -----------------------------------------------
+        # Send metrics to MLflow
+        # -----------------------------------------------
+
+        for key, value in metrics.items():
+
+            client.log_metric(
+                run_id=run_id,
+                key=key,
+                value=value,
+            )
+
+        print()
+        print(
+            f"Day {day} ({row['lead_hours']})"
+        )
+
+        print(
+            f"  RMSE: "
+            f"{row['xgb_rmse']:.4f}"
+        )
+
+        print(
+            f"  MAE:  "
+            f"{row['xgb_mae']:.4f}"
+        )
+
+        print(
+            f"  R²:   "
+            f"{row['xgb_r2']:.4f}"
+        )
+
+        print(
+            f"  Persistence RMSE: "
+            f"{row['persistence_rmse']:.4f}"
+        )
+
+        print(
+            f"  RMSE improvement: "
+            f"{row['rmse_improvement_percent']:.2f}%"
+        )
+
+    print()
+    print(
+        "✓ Day 1/2/3 metrics logged to MLflow"
+    )
+
+    print(
+        f"✓ Champion V{model_version.version}"
+    )
+
+    print(
+        f"✓ Run: {run_id}"
+    )
 
 # ============================================================
 # MAIN
@@ -1256,6 +1438,14 @@ def main():
 
     daily_results = pd.DataFrame(
         daily_rows
+    )
+
+    # --------------------------------------------------------
+    # LOG DAY 1 / DAY 2 / DAY 3 TO MLFLOW
+    # --------------------------------------------------------
+
+    log_daily_metrics_to_mlflow(
+        daily_results
     )
 
     # --------------------------------------------------------
