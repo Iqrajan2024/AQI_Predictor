@@ -480,38 +480,83 @@ def load_model():
             f"Model: {MLFLOW_MODEL_NAME}\n"
             f"Alias: {MLFLOW_MODEL_ALIAS}\n"
             f"Tracking URI: {MLFLOW_TRACKING_URI}\n\n"
-            "Start MLflow and make sure the model "
-            "has the champion alias."
+            "Make sure the model has the champion alias."
         ) from exc
 
+    champion_version = str(
+        champion.version
+    )
+
+    champion_run_id = champion.run_id
+
+    # IMPORTANT:
+    # Build the URI from the resolved online champion.
+    # Do not allow an environment variable to point
+    # prediction at a different model version.
+    model_uri = (
+        f"models:/{MLFLOW_MODEL_NAME}@"
+        f"{MLFLOW_MODEL_ALIAS}"
+    )
+
+    print()
     print(
         "Champion version:",
-        champion.version,
+        champion_version,
     )
+
+    print(
+        "Champion run ID:",
+        champion_run_id,
+    )
+
+    print(
+        "Champion source:",
+        champion.source,
+    )
+
+    print(
+        "Resolved model URI:",
+        model_uri,
+    )
+
+    # --------------------------------------------------------
+    # LOAD EXACT ONLINE CHAMPION
+    # --------------------------------------------------------
 
     model = (
         mlflow.pyfunc.load_model(
-            MLFLOW_MODEL_URI
+            model_uri
         )
     )
 
+    print()
     print(
         "✓ MLflow champion model loaded"
     )
 
     print(
-        "Model URI:",
-        MLFLOW_MODEL_URI,
+        "✓ Model version:",
+        champion_version,
     )
 
     print(
-        "Model type:",
+        "✓ Run ID:",
+        champion_run_id,
+    )
+
+    print(
+        "✓ Model URI:",
+        model_uri,
+    )
+
+    print(
+        "✓ Model type:",
         type(model),
     )
 
     return model
 
-
+   
 # ============================================================
 # FEAST FEATURE CONTRACT
 # ============================================================
