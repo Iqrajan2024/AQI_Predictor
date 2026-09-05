@@ -32,10 +32,71 @@ st.set_page_config(
 
 
 # ============================================================
-# CONFIG
+# CONFIGURATION HELPERS
 # ============================================================
 
-DEFAULT_API_URL = "http://127.0.0.1:8000"
+LOCAL_API_URL = "http://127.0.0.1:8000"
+CLOUD_API_URL = (
+    "https://pearls-aqi-predictor-3aece6f2.fastapicloud.dev"
+)
+
+LOCAL_MLFLOW_URL = "http://127.0.0.1:5000"
+
+MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
+MLFLOW_MODEL_ALIAS = "champion"
+
+
+def get_secret_or_env(
+    key: str,
+    default: str | None = None,
+) -> str | None:
+    """
+    Get configuration from Streamlit secrets first,
+    then environment variables, then default.
+
+    This allows the same code to work locally and when deployed.
+    """
+
+    # --------------------------------------------------------
+    # Streamlit secrets
+    # --------------------------------------------------------
+
+    try:
+        value = st.secrets.get(key)
+
+        if value is not None and str(value).strip():
+            return str(value).strip()
+
+    except Exception:
+        pass
+
+    # --------------------------------------------------------
+    # Environment variable
+    # --------------------------------------------------------
+
+    value = os.getenv(key)
+
+    if value is not None and value.strip():
+        return value.strip()
+
+    return default
+
+
+# ============================================================
+# API CONFIGURATION
+# ============================================================
+
+CONFIGURED_API_URL = get_secret_or_env(
+    "STREAMLIT_API_URL",
+    CLOUD_API_URL,
+)
+
+CONFIGURED_API_URL = CONFIGURED_API_URL.rstrip("/")
+
+
+# ============================================================
+# EVALUATION FILES
+# ============================================================
 
 EVALUATION_SUMMARY_FILE = (
     Path(__file__).resolve().parents[2]
@@ -51,18 +112,109 @@ EVALUATION_DAILY_METRICS_FILE = (
     / "historical_72h_daily_metrics.csv"
 )
 
+
 # ============================================================
-# MLOps / MODEL REGISTRY
+# MLFLOW CONFIGURATION
 # ============================================================
 
-MLFLOW_TRACKING_URI = os.getenv(
-    "MLFLOW_TRACKING_URI",
-    "http://127.0.0.1:5000",
-)
 MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
 MLFLOW_MODEL_ALIAS = "champion"
 
-mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+LOCAL_MLFLOW_URL = "http://127.0.0.1:5000"
+
+# ------------------------------------------------------------
+# DagsHub MLflow
+#
+# MLFLOW_TRACKING_URI:
+#     https://dagshub.com/<USERNAME>/<REPOSITORY>.mlflow
+#
+# MLFLOW_TRACKING_USERNAME:
+#      DagsHub username
+#
+# MLFLOW_TRACKING_PASSWORD:
+#      DagsHub access token
+# ------------------------------------------------------------
+
+MLFLOW_TRACKING_URI = get_secret_or_env(
+    "MLFLOW_TRACKING_URI",
+    "",
+)
+
+MLFLOW_USERNAME = get_secret_or_env(
+    "MLFLOW_TRACKING_USERNAME",
+    "",
+)
+
+MLFLOW_PASSWORD = get_secret_or_env(
+    "MLFLOW_TRACKING_PASSWORD",
+    "",
+)
+
+# ------------------------------------------------------------
+# Configure MLflow authentication for Cloud/ Dagshub
+# ------------------------------------------------------------
+
+if MLFLOW_TRACKING_URI:
+
+    if MLFLOW_USERNAME:
+        os.environ["MLFLOW_TRACKING_USERNAME"] = (
+            MLFLOW_USERNAME
+        )
+
+    if MLFLOW_PASSWORD:
+        os.environ["MLFLOW_TRACKING_PASSWORD"] = (
+            MLFLOW_PASSWORD
+        )
+
+    mlflow.set_tracking_uri(
+        MLFLOW_TRACKING_URI
+    )
+
+    mlflow.set_registry_uri(
+        MLFLOW_TRACKING_URI
+    )
+
+# ------------------------------------------------------------
+# LOCAL DEVELOPMENT MODE
+# ------------------------------------------------------------
+
+else:
+
+    MLFLOW_TRACKING_URI = LOCAL_MLFLOW_URL
+
+    mlflow.set_tracking_uri(
+        LOCAL_MLFLOW_URL
+    )
+
+    mlflow.set_registry_uri(
+        LOCAL_MLFLOW_URL
+    )
+# ------------------------------------------------------------
+# DO NOT silently fall back to localhost in production.
+# ------------------------------------------------------------
+
+if not MLFLOW_TRACKING_URI:
+
+    raise RuntimeError(
+        "MLFLOW_TRACKING_URI is not configured. "
+        "Configure the DagsHub MLflow tracking URI in "
+        "Streamlit Secrets."
+    )
+
+if not MLFLOW_USERNAME:
+
+    raise RuntimeError(
+        "MLFLOW_TRACKING_USERNAME is not configured. "
+        "Configure your DagsHub username in Streamlit Secrets."
+    )
+
+if not MLFLOW_PASSWORD:
+
+    raise RuntimeError(
+        "MLFLOW_TRACKING_PASSWORD is not configured. "
+        "Configure your DagsHub access token in Streamlit Secrets."
+    )
+
 
 # ============================================================
 # CSS
@@ -164,42 +316,64 @@ st.markdown(
 # ============================================================
 
 if "api_url" not in st.session_state:
-    st.session_state.api_url = DEFAULT_API_URL.rstrip("/")
+    st.session_state.api_url = CLOUD_API_URL.rstrip("/")
 
+if "api_url_checked" not in st.session_state:
+    st.session_state.api_url_checked = False
 
 # ============================================================
 # HELPERS
 # ============================================================
 
 def api_get(endpoint: str, timeout: int = 45) -> Any:
-    """GET one FastAPI endpoint and return decoded JSON."""
-    url = f"{st.session_state.api_url}{endpoint}"
+    """
+    GET one FastAPI endpoint and return decoded JSON.
+
+    The configured FastAPI URL is used first.
+
+    The dashboard itself does not expose any Local/Cloud selector.
+    """
+
+    base_url = st.session_state.api_url.rstrip("/")
+    url = f"{base_url}{endpoint}"
 
     try:
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(
+            url,
+            timeout=(5, timeout),
+        )
+
     except requests.RequestException as exc:
+
         raise RuntimeError(
-            f"Unable to connect to FastAPI at {st.session_state.api_url}. "
+            f"Unable to connect to FastAPI at {base_url}. "
             f"Make sure the API is running. Error: {exc}"
         ) from exc
 
     if response.status_code >= 400:
+
         try:
-            detail = response.json().get("detail", response.text)
+            detail = response.json().get(
+                "detail",
+                response.text,
+            )
+
         except Exception:
             detail = response.text
 
         raise RuntimeError(
-            f"FastAPI returned HTTP {response.status_code}: {detail}"
+            f"FastAPI returned HTTP "
+            f"{response.status_code}: {detail}"
         )
 
     try:
         return response.json()
+
     except ValueError as exc:
+
         raise RuntimeError(
             f"FastAPI returned invalid JSON from {url}."
         ) from exc
-
 
 def get_daily_rmse_vs_persistence() -> dict[int, float]:
     """
@@ -272,14 +446,31 @@ def get_daily_rmse_vs_persistence() -> dict[int, float]:
         return {}
 
 
-@st.cache_data(ttl=0, show_spinner=False)
+@st.cache_data(
+    ttl=60,
+    show_spinner=False,
+)
 def get_dashboard_data(api_url: str) -> dict:
-    """Load current AQI, current trend, and forecast data."""
+    """
+    Load current AQI, current trend, and forecast data.
+
+    The api_url is an argument so Streamlit caches each API
+    configuration independently.
+    """
+
     base = api_url.rstrip("/")
 
     def get(path: str) -> Any:
-        response = requests.get(f"{base}{path}", timeout=45)
+
+        url = f"{base}{path}"
+
+        response = requests.get(
+            url,
+            timeout=(5, 45),
+        )
+
         response.raise_for_status()
+
         return response.json()
 
     return {
@@ -288,18 +479,138 @@ def get_dashboard_data(api_url: str) -> dict:
         "forecast": get("/forecast"),
     }
 
+# ============================================================
+# AUTOMATIC FASTAPI URL DETECTION
+# ============================================================
 
-@st.cache_data(ttl=0, show_spinner=False) 
-def get_shap_data(api_url: str, forecast_day: str) -> dict: 
-    """ Load fresh SHAP explanations for one forecast day. 
-    ttl=0 ensures that dashboard reruns do not keep an old 
-    SHAP response for the same date. """ 
-    base = api_url.rstrip("/") 
-    response = requests.get( 
-        f"{base}/shap/{forecast_day}", 
-        timeout=90, 
-    ) 
-    response.raise_for_status() 
+def resolve_fastapi_url() -> str:
+    """
+    Automatically select the available FastAPI service.
+
+    Priority:
+
+    1. Explicit FASTAPI_BASE_URL configuration
+    2. Local FastAPI at 127.0.0.1:8000
+    3. Deployed FastAPI Cloud service
+
+    No sidebar selector is added.
+    """
+
+    configured_url = get_secret_or_env(
+        "FASTAPI_BASE_URL",
+        "",
+    )
+
+    # --------------------------------------------------------
+    # Explicit configuration wins
+    # --------------------------------------------------------
+
+    if configured_url:
+
+        configured_url = (
+            configured_url
+            .strip()
+            .rstrip("/")
+        )
+
+        try:
+
+            response = requests.get(
+                f"{configured_url}/health",
+                timeout=(2, 5),
+            )
+
+            if response.status_code == 200:
+                return configured_url
+
+        except requests.RequestException:
+            pass
+
+    # --------------------------------------------------------
+    # Try LOCAL FastAPI
+    # --------------------------------------------------------
+
+    try:
+
+        response = requests.get(
+            f"{LOCAL_API_URL}/health",
+            timeout=(1.5, 3),
+        )
+
+        if response.status_code == 200:
+
+            return LOCAL_API_URL
+
+    except requests.RequestException:
+        pass
+
+    # --------------------------------------------------------
+    # Fall back to DEPLOYED FastAPI
+    # --------------------------------------------------------
+
+    try:
+
+        response = requests.get(
+            f"{CLOUD_API_URL}/health",
+            timeout=(5, 20),
+        )
+
+        if response.status_code == 200:
+
+            return CLOUD_API_URL
+
+    except requests.RequestException:
+        pass
+
+    # --------------------------------------------------------
+    # If both checks fail, return configured/default URL.
+    # The normal dashboard error handler will explain the
+    # actual API problem.
+    # --------------------------------------------------------
+
+    if configured_url:
+        return configured_url
+
+    return CLOUD_API_URL
+
+# ============================================================
+# RESOLVE FASTAPI SERVICE ON FIRST RUN
+# ============================================================
+
+if not st.session_state.api_url_checked:
+
+    st.session_state.api_url = (
+        resolve_fastapi_url()
+    )
+
+    st.session_state.api_url_checked = True
+
+
+@st.cache_data(
+    ttl=300,
+    show_spinner=False,
+)
+def get_shap_data(
+    api_url: str,
+    forecast_day: str,
+) -> dict:
+
+    """
+    Load SHAP explanations for one forecast day.
+
+    Cached for 5 minutes so Streamlit reruns do not repeatedly
+    request the same expensive SHAP calculation.
+    """
+
+    base = api_url.rstrip("/")
+
+    response = requests.get(
+        f"{base}/shap/{forecast_day}",
+        timeout=(5, 120),
+    )
+
+    response.raise_for_status()
+
     return response.json()
 
 # ============================================================ 
@@ -713,27 +1024,26 @@ def normalize_forecast_days(forecast: dict) -> list[dict]:
 # GET CURRENT CHAMPION MODEL INFORMATION
 # ============================================================
 
+@st.cache_data(ttl=300, show_spinner=False)
 def get_champion_model_info() -> dict:
-    """
-    Get the model currently assigned to the MLflow champion alias.
-    """
-
     try:
         client = MlflowClient(
-            tracking_uri=MLFLOW_TRACKING_URI
+            tracking_uri=MLFLOW_TRACKING_URI,
+            registry_uri=MLFLOW_TRACKING_URI,
         )
 
         model_version = (
             client.get_model_version_by_alias(
-                MLFLOW_MODEL_NAME,
-                MLFLOW_MODEL_ALIAS,
+                name=MLFLOW_MODEL_NAME,
+                alias=MLFLOW_MODEL_ALIAS,
             )
         )
 
         return {
-            "name": MLFLOW_MODEL_NAME,
+            "name": model_version.name,
             "version": str(model_version.version),
             "alias": MLFLOW_MODEL_ALIAS,
+            "status": "Connected",
         }
 
     except Exception:
@@ -741,8 +1051,9 @@ def get_champion_model_info() -> dict:
             "name": MLFLOW_MODEL_NAME,
             "version": "N/A",
             "alias": MLFLOW_MODEL_ALIAS,
+            "error": str(exc),
         }
-
+    
 # ============================================================
 # SIDEBAR
 # ============================================================
@@ -795,6 +1106,10 @@ with st.sidebar:
         **Alias:** `{champion_info["alias"]}`
         """
     )
+    if champion_info.get("error"):
+        st.caption(
+            f"MLflow unavailable : {champion_info['error']}"
+        )
 
     st.markdown("---")
 
@@ -932,9 +1247,9 @@ except Exception as exc:
     st.stop()
 
 
-current = dashboard_data["current"]
-current_trend = dashboard_data["current_trend"]
-forecast = dashboard_data["forecast"]
+current = dashboard_data.get("current", {})
+current_trend = dashboard_data.get("current_trend", {})
+forecast = dashboard_data.get("forecast", {})
 
 
 # ============================================================
