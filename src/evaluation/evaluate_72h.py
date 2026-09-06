@@ -70,15 +70,170 @@ HISTORY_HOURS = 96
 TIMESTAMP_COLUMN = "timestamp"
 TARGET_COLUMN = "us_aqi"
 
+
 # ============================================================
-# MLFLOW
+# MLFLOW / DAGSHUB
 # ============================================================
 
 MLFLOW_MODEL_NAME = "Pearls_AQI_XGBoost"
 MLFLOW_MODEL_ALIAS = "champion"
 
-MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI")
-MLFLOW_REGISTRY_URI = MLFLOW_TRACKING_URI
+
+def configure_mlflow():
+    """
+    Configure MLflow to use the remote DagsHub MLflow server.
+
+    IMPORTANT:
+    This evaluation script must never silently fall back
+    to local SQLite/file-based MLflow.
+
+    Both tracking and registry are explicitly configured
+    to the same DagsHub URI.
+    """
+
+    print()
+    print("=" * 70)
+    print("CONFIGURING DAGSHUB MLFLOW")
+    print("=" * 70)
+
+    tracking_uri = (
+        os.getenv(
+            "MLFLOW_TRACKING_URI",
+            "",
+        )
+        .strip()
+    )
+
+    username = (
+        os.getenv(
+            "MLFLOW_TRACKING_USERNAME",
+            "",
+        )
+        .strip()
+    )
+
+    password = (
+        os.getenv(
+            "MLFLOW_TRACKING_PASSWORD",
+            "",
+        )
+        .strip()
+    )
+
+    # --------------------------------------------------------
+    # Required secrets
+    # --------------------------------------------------------
+
+    if not tracking_uri:
+        raise RuntimeError(
+            "MLFLOW_TRACKING_URI is not set. "
+            "Evaluation must use the remote DagsHub MLflow server."
+        )
+
+    if not username:
+        raise RuntimeError(
+            "MLFLOW_TRACKING_USERNAME is not set."
+        )
+
+    if not password:
+        raise RuntimeError(
+            "MLFLOW_TRACKING_PASSWORD is not set."
+        )
+
+    # --------------------------------------------------------
+    # Prevent accidental local MLflow
+    # --------------------------------------------------------
+
+    uri_lower = tracking_uri.lower()
+
+    forbidden_local_patterns = [
+        "sqlite:",
+        "file:",
+        "mlruns",
+        "127.0.0.1",
+        "localhost",
+    ]
+
+    for pattern in forbidden_local_patterns:
+
+        if pattern in uri_lower:
+
+            raise RuntimeError(
+                "Local MLflow URI detected:\n"
+                f"{tracking_uri}\n\n"
+                "The evaluation pipeline must use "
+                "the remote DagsHub MLflow server."
+            )
+
+    # --------------------------------------------------------
+    # Configure authentication
+    # --------------------------------------------------------
+
+    os.environ["MLFLOW_TRACKING_USERNAME"] = username
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = password
+
+    # --------------------------------------------------------
+    # CRITICAL FIX:
+    #
+    # Explicitly configure BOTH tracking and registry
+    # to the same DagsHub server.
+    # --------------------------------------------------------
+
+    mlflow.set_tracking_uri(
+        tracking_uri
+    )
+
+    mlflow.set_registry_uri(
+        tracking_uri
+    )
+
+    print(
+        "Tracking URI:",
+        mlflow.get_tracking_uri(),
+    )
+
+    print(
+        "Registry URI:",
+        mlflow.get_registry_uri(),
+    )
+
+    # --------------------------------------------------------
+    # Create client explicitly using remote DagsHub
+    # --------------------------------------------------------
+
+    client = MlflowClient(
+        tracking_uri=tracking_uri,
+        registry_uri=tracking_uri,
+    )
+
+    # --------------------------------------------------------
+    # Connectivity verification
+    # --------------------------------------------------------
+
+    try:
+
+        experiments = client.search_experiments(
+            max_results=10
+        )
+
+        print(
+            f"✓ DagsHub MLflow connection successful"
+        )
+
+        print(
+            f"✓ Experiments accessible: "
+            f"{len(experiments)}"
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            "Unable to connect to DagsHub MLflow.\n"
+            f"Tracking URI: {tracking_uri}\n"
+            f"Error: {exc}"
+        ) from exc
+
+    return client
 
 
 # ============================================================
@@ -86,6 +241,7 @@ MLFLOW_REGISTRY_URI = MLFLOW_TRACKING_URI
 # ============================================================
 
 FEATURE_COLUMNS = [
+
     # Weather
     "temperature_2m",
     "relative_humidity_2m",
@@ -214,11 +370,14 @@ def load_data():
     print("=" * 70)
 
     if not DATA_FILE.exists():
+
         raise FileNotFoundError(
             f"Historical feature file not found:\n{DATA_FILE}"
         )
 
-    df = pd.read_parquet(DATA_FILE)
+    df = pd.read_parquet(
+        DATA_FILE
+    )
 
     required_columns = {
         TIMESTAMP_COLUMN,
@@ -231,6 +390,7 @@ def load_data():
     )
 
     if missing:
+
         raise ValueError(
             "Missing required columns: "
             f"{sorted(missing)}"
@@ -282,22 +442,25 @@ def load_data():
         )
 
     # --------------------------------------------------------
-    # Verify all model source columns
+    # Verify source columns
     # --------------------------------------------------------
 
     source_columns = [
+
         "temperature_2m",
         "relative_humidity_2m",
         "pressure_msl",
         "precipitation",
         "wind_speed_10m",
         "wind_direction_10m",
+
         "pm2_5",
         "pm10",
         "carbon_monoxide",
         "nitrogen_dioxide",
         "sulphur_dioxide",
         "ozone",
+
         "us_aqi",
     ]
 
@@ -348,6 +511,7 @@ def load_model():
     print("=" * 70)
 
     if not MODEL_FILE.exists():
+
         raise FileNotFoundError(
             f"Champion model not found:\n{MODEL_FILE}"
         )
@@ -375,16 +539,6 @@ def load_model():
 def create_features(
     history_df,
 ):
-    """
-    Recreate the exact 70-feature production contract.
-
-    IMPORTANT:
-    The final row is the row for which the model prediction
-    is being generated.
-
-    All lag/rolling/change features use information available
-    before that prediction timestamp.
-    """
 
     df = history_df.copy()
 
@@ -394,13 +548,13 @@ def create_features(
         .reset_index(drop=True)
     )
 
-    # --------------------------------------------------------
-    # TIME FEATURES
-    # --------------------------------------------------------
-
     timestamp = df[
         TIMESTAMP_COLUMN
     ]
+
+    # --------------------------------------------------------
+    # TIME
+    # --------------------------------------------------------
 
     df["hour"] = timestamp.dt.hour
 
@@ -424,39 +578,29 @@ def create_features(
     # AQI LAGS
     # --------------------------------------------------------
 
-    df["aqi_lag_1"] = (
-        df["us_aqi"].shift(1)
-    )
+    for lag in [
+        1,
+        3,
+        6,
+        12,
+        24,
+        48,
+        72,
+    ]:
 
-    df["aqi_lag_3"] = (
-        df["us_aqi"].shift(3)
-    )
-
-    df["aqi_lag_6"] = (
-        df["us_aqi"].shift(6)
-    )
-
-    df["aqi_lag_12"] = (
-        df["us_aqi"].shift(12)
-    )
-
-    df["aqi_lag_24"] = (
-        df["us_aqi"].shift(24)
-    )
-
-    df["aqi_lag_48"] = (
-        df["us_aqi"].shift(48)
-    )
-
-    df["aqi_lag_72"] = (
-        df["us_aqi"].shift(72)
-    )
+        df[
+            f"aqi_lag_{lag}"
+        ] = (
+            df[TARGET_COLUMN]
+            .shift(lag)
+        )
 
     # --------------------------------------------------------
     # POLLUTANT LAGS
     # --------------------------------------------------------
 
-    pollutant_lag_columns = [
+    pollutant_columns = [
+
         "pm2_5",
         "pm10",
         "carbon_monoxide",
@@ -465,7 +609,7 @@ def create_features(
         "ozone",
     ]
 
-    for column in pollutant_lag_columns:
+    for column in pollutant_columns:
 
         for lag in [
             1,
@@ -485,167 +629,129 @@ def create_features(
     # AQI ROLLING MEANS
     # --------------------------------------------------------
 
-    df["aqi_3h_mean"] = (
-        df["us_aqi"]
-        .shift(1)
-        .rolling(3)
-        .mean()
-    )
+    for window in [
+        3,
+        6,
+        12,
+        24,
+    ]:
 
-    df["aqi_6h_mean"] = (
-        df["us_aqi"]
-        .shift(1)
-        .rolling(6)
-        .mean()
-    )
-
-    df["aqi_12h_mean"] = (
-        df["us_aqi"]
-        .shift(1)
-        .rolling(12)
-        .mean()
-    )
-
-    df["aqi_24h_mean"] = (
-        df["us_aqi"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
+        df[
+            f"aqi_{window}h_mean"
+        ] = (
+            df[TARGET_COLUMN]
+            .shift(1)
+            .rolling(window)
+            .mean()
+        )
 
     # --------------------------------------------------------
     # PM2.5 ROLLING MEANS
     # --------------------------------------------------------
 
-    df["pm2_5_3h_mean"] = (
-        df["pm2_5"]
-        .shift(1)
-        .rolling(3)
-        .mean()
-    )
+    for window in [
+        3,
+        6,
+        24,
+    ]:
 
-    df["pm2_5_6h_mean"] = (
-        df["pm2_5"]
-        .shift(1)
-        .rolling(6)
-        .mean()
-    )
-
-    df["pm2_5_24h_mean"] = (
-        df["pm2_5"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
+        df[
+            f"pm2_5_{window}h_mean"
+        ] = (
+            df["pm2_5"]
+            .shift(1)
+            .rolling(window)
+            .mean()
+        )
 
     # --------------------------------------------------------
     # PM10 ROLLING MEANS
     # --------------------------------------------------------
 
-    df["pm10_3h_mean"] = (
-        df["pm10"]
-        .shift(1)
-        .rolling(3)
-        .mean()
-    )
+    for window in [
+        3,
+        6,
+        24,
+    ]:
 
-    df["pm10_6h_mean"] = (
-        df["pm10"]
-        .shift(1)
-        .rolling(6)
-        .mean()
-    )
-
-    df["pm10_24h_mean"] = (
-        df["pm10"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
+        df[
+            f"pm10_{window}h_mean"
+        ] = (
+            df["pm10"]
+            .shift(1)
+            .rolling(window)
+            .mean()
+        )
 
     # --------------------------------------------------------
     # 24-HOUR POLLUTANT MEANS
     # --------------------------------------------------------
 
-    df["carbon_monoxide_24h_mean"] = (
-        df["carbon_monoxide"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
+    for column in [
+        "carbon_monoxide",
+        "nitrogen_dioxide",
+        "sulphur_dioxide",
+        "ozone",
+    ]:
 
-    df["nitrogen_dioxide_24h_mean"] = (
-        df["nitrogen_dioxide"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
-
-    df["sulphur_dioxide_24h_mean"] = (
-        df["sulphur_dioxide"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
-
-    df["ozone_24h_mean"] = (
-        df["ozone"]
-        .shift(1)
-        .rolling(24)
-        .mean()
-    )
+        df[
+            f"{column}_24h_mean"
+        ] = (
+            df[column]
+            .shift(1)
+            .rolling(24)
+            .mean()
+        )
 
     # --------------------------------------------------------
     # AQI CHANGES
     # --------------------------------------------------------
 
-    df["aqi_change_1h"] = (
-        df["us_aqi"]
-        - df["us_aqi"].shift(1)
-    )
+    for lag in [
+        1,
+        3,
+        6,
+        24,
+    ]:
 
-    df["aqi_change_3h"] = (
-        df["us_aqi"]
-        - df["us_aqi"].shift(3)
-    )
-
-    df["aqi_change_6h"] = (
-        df["us_aqi"]
-        - df["us_aqi"].shift(6)
-    )
-
-    df["aqi_change_24h"] = (
-        df["us_aqi"]
-        - df["us_aqi"].shift(24)
-    )
+        df[
+            f"aqi_change_{lag}h"
+        ] = (
+            df[TARGET_COLUMN]
+            - df[TARGET_COLUMN].shift(lag)
+        )
 
     # --------------------------------------------------------
     # PM2.5 CHANGES
     # --------------------------------------------------------
 
-    df["pm2_5_change_1h"] = (
-        df["pm2_5"]
-        - df["pm2_5"].shift(1)
-    )
+    for lag in [
+        1,
+        24,
+    ]:
 
-    df["pm2_5_change_24h"] = (
-        df["pm2_5"]
-        - df["pm2_5"].shift(24)
-    )
+        df[
+            f"pm2_5_change_{lag}h"
+        ] = (
+            df["pm2_5"]
+            - df["pm2_5"].shift(lag)
+        )
 
     # --------------------------------------------------------
     # PM10 CHANGES
     # --------------------------------------------------------
 
-    df["pm10_change_1h"] = (
-        df["pm10"]
-        - df["pm10"].shift(1)
-    )
+    for lag in [
+        1,
+        24,
+    ]:
 
-    df["pm10_change_24h"] = (
-        df["pm10"]
-        - df["pm10"].shift(24)
-    )
+        df[
+            f"pm10_change_{lag}h"
+        ] = (
+            df["pm10"]
+            - df["pm10"].shift(lag)
+        )
 
     # --------------------------------------------------------
     # CONTRACT VALIDATION
@@ -680,25 +786,6 @@ def recursive_forecast(
     model,
     origin_index,
 ):
-    """
-    Historical 72-hour recursive forecast.
-
-    At the origin:
-        actual AQI is known.
-
-    Hour 1:
-        predict using origin information.
-
-    Hour 2:
-        previous prediction becomes AQI state.
-
-    ...
-
-    Hour 72:
-        recursively uses previous predictions.
-
-    Future actual AQI is NEVER used as recursive input.
-    """
 
     origin_timestamp = df.iloc[
         origin_index
@@ -713,16 +800,10 @@ def recursive_forecast(
     if not np.isfinite(
         last_observed_aqi
     ):
+
         raise ValueError(
             "Origin AQI is not finite."
         )
-
-    # --------------------------------------------------------
-    # Working data.
-    #
-    # Weather/pollutants remain historical future values.
-    # AQI will be overwritten recursively.
-    # --------------------------------------------------------
 
     working = df.copy()
 
@@ -751,14 +832,7 @@ def recursive_forecast(
             )
 
         # ----------------------------------------------------
-        # CRITICAL:
-        #
-        # Never use actual future AQI.
-        #
-        # For every future step, replace AQI with the
-        # previous predicted AQI.
-        #
-        # For step 1, the origin AQI remains the known state.
+        # Replace future AQI with recursive state
         # ----------------------------------------------------
 
         if step == 1:
@@ -776,14 +850,13 @@ def recursive_forecast(
             ] = previous_prediction
 
         # ----------------------------------------------------
-        # Only use history through current prediction row.
+        # History through current prediction row
         # ----------------------------------------------------
 
         history = working.iloc[
             : future_index + 1
         ].copy()
 
-        # We need enough historical rows for lag 72.
         if len(history) < 73:
 
             raise ValueError(
@@ -840,6 +913,7 @@ def recursive_forecast(
             prediction,
         )
 
+        # Actual future AQI is ONLY used for evaluation.
         actual_aqi = float(
             df.iloc[
                 future_index
@@ -905,54 +979,86 @@ def calculate_metrics(
     )
 
     r2 = float(
-            r2_score(
-                actual,
-                predicted,
-            )
+        r2_score(
+            actual,
+            predicted,
         )
+    )
 
     return rmse, mae, r2
 
+
 # ============================================================
-# LOG DAY 1 / DAY 2 / DAY 3 METRICS TO CHAMPION MLFLOW RUN
+# LOG DAY 1 / DAY 2 / DAY 3 METRICS TO DAGSHUB
 # ============================================================
 
 def log_daily_metrics_to_mlflow(
     daily_results,
 ):
-    """
-    Log the already-calculated Day 1 / Day 2 / Day 3
-    evaluation metrics to the MLflow run associated
-    with the current champion model.
-
-    IMPORTANT:
-    This does NOT retrain the model.
-
-    It attaches the historical evaluation metrics
-    calculated by this script to the existing champion
-    MLflow run.
-    """
 
     print()
     print("=" * 70)
-    print("LOGGING DAILY METRICS TO MLFLOW")
+    print("LOGGING DAILY METRICS TO DAGSHUB MLFLOW")
     print("=" * 70)
 
-    client = MlflowClient(
-        tracking_uri=MLFLOW_TRACKING_URI,
-        registry_uri=MLFLOW_REGISTRY_URI,
-    )
-
     # --------------------------------------------------------
-    # Get the model currently assigned to champion
+    # IMPORTANT:
+    # Always configure remote MLflow here.
     # --------------------------------------------------------
 
-    model_version = (
-        client.get_model_version_by_alias(
-            name=MLFLOW_MODEL_NAME,
-            alias=MLFLOW_MODEL_ALIAS,
+    client = configure_mlflow()
+
+    # --------------------------------------------------------
+    # Verify registered model exists
+    # --------------------------------------------------------
+
+    try:
+
+        registered_model = (
+            client.get_registered_model(
+                MLFLOW_MODEL_NAME
+            )
         )
-    )
+
+        print(
+            "✓ Registered model found:",
+            registered_model.name,
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            f"Registered model '{MLFLOW_MODEL_NAME}' "
+            "was not found in the configured DagsHub "
+            "MLflow Model Registry.\n"
+            f"Registry URI: "
+            f"{mlflow.get_registry_uri()}\n"
+            f"Original error: {exc}"
+        ) from exc
+
+    # --------------------------------------------------------
+    # Find current champion
+    # --------------------------------------------------------
+
+    try:
+
+        model_version = (
+            client.get_model_version_by_alias(
+                name=MLFLOW_MODEL_NAME,
+                alias=MLFLOW_MODEL_ALIAS,
+            )
+        )
+
+    except Exception as exc:
+
+        raise RuntimeError(
+            f"Could not find alias "
+            f"'{MLFLOW_MODEL_ALIAS}' for model "
+            f"'{MLFLOW_MODEL_NAME}'.\n"
+            f"Registry URI: "
+            f"{mlflow.get_registry_uri()}\n"
+            f"Original error: {exc}"
+        ) from exc
 
     run_id = model_version.run_id
 
@@ -971,14 +1077,27 @@ def log_daily_metrics_to_mlflow(
         run_id,
     )
 
-    # --------------------------------------------------------
-    # Safety check
-    # --------------------------------------------------------
-
     if not run_id:
+
         raise ValueError(
             "Champion model has no associated MLflow run ID."
         )
+
+    # --------------------------------------------------------
+    # Verify run exists
+    # --------------------------------------------------------
+
+    run = client.get_run(
+        run_id
+    )
+
+    print(
+        "✓ Champion MLflow run found"
+    )
+
+    print(
+        "✓ Existing champion run will be updated"
+    )
 
     # --------------------------------------------------------
     # Log Day 1 / Day 2 / Day 3
@@ -986,50 +1105,69 @@ def log_daily_metrics_to_mlflow(
 
     for _, row in daily_results.iterrows():
 
-        day = int(row["day"])
+        day = int(
+            row["day"]
+        )
 
-        # -----------------------------------------------
-        # Validate day
-        # -----------------------------------------------
+        if day not in [
+            1,
+            2,
+            3,
+        ]:
 
-        if day not in [1, 2, 3]:
             raise ValueError(
                 f"Unexpected day value: {day}"
             )
 
-        # -----------------------------------------------
-        # Metrics
-        # -----------------------------------------------
-
         metrics = {
+
+            # Model
             f"day{day}_rmse":
-                float(row["xgb_rmse"]),
+                float(
+                    row["xgb_rmse"]
+                ),
 
             f"day{day}_mae":
-                float(row["xgb_mae"]),
+                float(
+                    row["xgb_mae"]
+                ),
 
             f"day{day}_r2":
-                float(row["xgb_r2"]),
+                float(
+                    row["xgb_r2"]
+                ),
 
+            # Persistence
             f"day{day}_persistence_rmse":
-                float(row["persistence_rmse"]),
+                float(
+                    row["persistence_rmse"]
+                ),
 
             f"day{day}_persistence_mae":
-                float(row["persistence_mae"]),
+                float(
+                    row["persistence_mae"]
+                ),
 
             f"day{day}_persistence_r2":
-                float(row["persistence_r2"]),
+                float(
+                    row["persistence_r2"]
+                ),
 
+            # Improvement
             f"day{day}_rmse_improvement_vs_persistence_pct":
-                float(row["rmse_improvement_percent"]),
+                float(
+                    row["rmse_improvement_percent"]
+                ),
 
             f"day{day}_mae_improvement_vs_persistence_pct":
-                float(row["mae_improvement_percent"]),
+                float(
+                    row["mae_improvement_percent"]
+                ),
         }
 
-        # -----------------------------------------------
-        # Send metrics to MLflow
-        # -----------------------------------------------
+        # ----------------------------------------------------
+        # Log metrics to EXISTING champion run
+        # ----------------------------------------------------
 
         for key, value in metrics.items():
 
@@ -1041,7 +1179,8 @@ def log_daily_metrics_to_mlflow(
 
         print()
         print(
-            f"Day {day} ({row['lead_hours']})"
+            f"Day {day} "
+            f"({row['lead_hours']})"
         )
 
         print(
@@ -1050,12 +1189,12 @@ def log_daily_metrics_to_mlflow(
         )
 
         print(
-            f"  MAE:  "
+            f"  MAE: "
             f"{row['xgb_mae']:.4f}"
         )
 
         print(
-            f"  R²:   "
+            f"  R²: "
             f"{row['xgb_r2']:.4f}"
         )
 
@@ -1065,13 +1204,77 @@ def log_daily_metrics_to_mlflow(
         )
 
         print(
+            f"  Persistence MAE: "
+            f"{row['persistence_mae']:.4f}"
+        )
+
+        print(
+            f"  Persistence R²: "
+            f"{row['persistence_r2']:.4f}"
+        )
+
+        print(
             f"  RMSE improvement: "
             f"{row['rmse_improvement_percent']:.2f}%"
         )
 
+        print(
+            f"  MAE improvement: "
+            f"{row['mae_improvement_percent']:.2f}%"
+        )
+
+    # --------------------------------------------------------
+    # Verify metrics were actually written
+    # --------------------------------------------------------
+
+    updated_run = client.get_run(
+        run_id
+    )
+
+    updated_metrics = dict(
+        updated_run.data.metrics
+    )
+
+    required_metrics = []
+
+    for day in [
+        1,
+        2,
+        3,
+    ]:
+
+        required_metrics.extend(
+            [
+                f"day{day}_rmse",
+                f"day{day}_mae",
+                f"day{day}_r2",
+
+                f"day{day}_persistence_rmse",
+                f"day{day}_persistence_mae",
+                f"day{day}_persistence_r2",
+
+                f"day{day}_rmse_improvement_vs_persistence_pct",
+                f"day{day}_mae_improvement_vs_persistence_pct",
+            ]
+        )
+
+    missing_metrics = [
+        key
+        for key in required_metrics
+        if key not in updated_metrics
+    ]
+
+    if missing_metrics:
+
+        raise RuntimeError(
+            "MLflow metric verification failed. "
+            f"Missing metrics: {missing_metrics}"
+        )
+
     print()
     print(
-        "✓ Day 1/2/3 metrics logged to MLflow"
+        "✓ Day 1/2/3 metrics successfully "
+        "verified in DagsHub MLflow"
     )
 
     print(
@@ -1081,6 +1284,7 @@ def log_daily_metrics_to_mlflow(
     print(
         f"✓ Run: {run_id}"
     )
+
 
 # ============================================================
 # MAIN
@@ -1110,12 +1314,6 @@ def main():
 
     # --------------------------------------------------------
     # Determine origins
-    #
-    # Need:
-    #   96 historical hours
-    #   + 72 future hours
-    #
-    # Origins are separated by 24 hours.
     # --------------------------------------------------------
 
     first_origin = (
@@ -1216,21 +1414,25 @@ def main():
         )
 
         # ----------------------------------------------------
-        # Quick per-origin metrics
+        # Per-origin metrics
         # ----------------------------------------------------
 
-        xgb_rmse, xgb_mae, xgb_r2 = (
-            calculate_metrics(
-                forecast["actual_aqi"],
-                forecast["predicted_aqi"],
-            )
+        (
+            xgb_rmse,
+            xgb_mae,
+            xgb_r2,
+        ) = calculate_metrics(
+            forecast["actual_aqi"],
+            forecast["predicted_aqi"],
         )
 
-        persistence_rmse, persistence_mae, persistence_r2 = (
-            calculate_metrics(
-                forecast["actual_aqi"],
-                forecast["persistence_aqi"],
-            )
+        (
+            persistence_rmse,
+            persistence_mae,
+            persistence_r2,
+        ) = calculate_metrics(
+            forecast["actual_aqi"],
+            forecast["persistence_aqi"],
         )
 
         rmse_improvement = (
@@ -1258,13 +1460,13 @@ def main():
         )
 
         print(
-            f"XGB MAE:  {xgb_mae:.4f} | "
+            f"XGB MAE: {xgb_mae:.4f} | "
             f"Persistence MAE: "
             f"{persistence_mae:.4f}"
         )
 
         print(
-            f"XGB R²:   {xgb_r2:.4f} | "
+            f"XGB R²: {xgb_r2:.4f} | "
             f"Persistence R²: "
             f"{persistence_r2:.4f}"
         )
@@ -1304,18 +1506,22 @@ def main():
         "persistence_aqi"
     ].to_numpy()
 
-    xgb_rmse, xgb_mae, xgb_r2 = (
-        calculate_metrics(
-            actual,
-            predicted,
-        )
+    (
+        xgb_rmse,
+        xgb_mae,
+        xgb_r2,
+    ) = calculate_metrics(
+        actual,
+        predicted,
     )
 
-    persistence_rmse, persistence_mae, persistence_r2 = (
-        calculate_metrics(
-            actual,
-            persistence,
-        )
+    (
+        persistence_rmse,
+        persistence_mae,
+        persistence_r2,
+    ) = calculate_metrics(
+        actual,
+        persistence,
     )
 
     rmse_improvement = (
@@ -1377,11 +1583,13 @@ def main():
             "persistence_aqi"
         ].to_numpy()
 
-        day_xgb_rmse, day_xgb_mae, day_xgb_r2 = (
-            calculate_metrics(
-                actual_day,
-                predicted_day,
-            )
+        (
+            day_xgb_rmse,
+            day_xgb_mae,
+            day_xgb_r2,
+        ) = calculate_metrics(
+            actual_day,
+            predicted_day,
         )
 
         (
@@ -1414,23 +1622,31 @@ def main():
         daily_rows.append(
             {
                 "day": day,
-                "lead_hours": (
-                    f"{start_hour}-{end_hour}"
-                ),
+
+                "lead_hours":
+                    f"{start_hour}-{end_hour}",
+
                 "xgb_rmse":
                     day_xgb_rmse,
+
                 "xgb_mae":
                     day_xgb_mae,
+
                 "xgb_r2":
                     day_xgb_r2,
+
                 "persistence_rmse":
                     day_persistence_rmse,
+
                 "persistence_mae":
                     day_persistence_mae,
+
                 "persistence_r2":
                     day_persistence_r2,
+
                 "rmse_improvement_percent":
                     day_rmse_improvement,
+
                 "mae_improvement_percent":
                     day_mae_improvement,
             }
@@ -1441,7 +1657,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # LOG DAY 1 / DAY 2 / DAY 3 TO MLFLOW
+    # LOG TO REMOTE DAGSHUB MLFLOW
     # --------------------------------------------------------
 
     log_daily_metrics_to_mlflow(
@@ -1449,7 +1665,7 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Save forecast-level results
+    # Save results
     # --------------------------------------------------------
 
     results.to_csv(
@@ -1463,10 +1679,11 @@ def main():
     )
 
     # --------------------------------------------------------
-    # Save summary
+    # Summary
     # --------------------------------------------------------
 
     summary = {
+
         "evaluation_type":
             "historical_72_hour_recursive",
 
@@ -1483,7 +1700,10 @@ def main():
             FORECAST_HOURS,
 
         "model":
-            "Pearls_AQI_XGBoost",
+            MLFLOW_MODEL_NAME,
+
+        "model_alias":
+            MLFLOW_MODEL_ALIAS,
 
         "feature_count":
             len(FEATURE_COLUMNS),
@@ -1492,6 +1712,7 @@ def main():
             "fixed_origin_72_hour",
 
         "overall": {
+
             "xgb_rmse":
                 xgb_rmse,
 
@@ -1517,9 +1738,10 @@ def main():
                 mae_improvement,
         },
 
-        "daily": daily_results.to_dict(
-            orient="records"
-        ),
+        "daily":
+            daily_results.to_dict(
+                orient="records"
+            ),
 
         "oracle_exogenous":
             True,
@@ -1583,17 +1805,17 @@ def main():
     )
 
     print(
-        f"Persistence RMSE:   "
+        f"Persistence RMSE:    "
         f"{persistence_rmse:.4f}"
     )
 
     print(
-        f"Persistence MAE:    "
+        f"Persistence MAE:     "
         f"{persistence_mae:.4f}"
     )
 
     print(
-        f"Persistence R²:     "
+        f"Persistence R²:      "
         f"{persistence_r2:.4f}"
     )
 
@@ -1625,6 +1847,7 @@ def main():
     print(
         "Forecast-level:"
     )
+
     print(
         FORECAST_OUTPUT_FILE
     )
@@ -1633,6 +1856,7 @@ def main():
     print(
         "Daily metrics:"
     )
+
     print(
         DAILY_OUTPUT_FILE
     )
@@ -1641,15 +1865,22 @@ def main():
     print(
         "Summary:"
     )
+
     print(
         SUMMARY_FILE
     )
 
     print()
     print("=" * 70)
+
     print(
         "✓ HISTORICAL 72-HOUR EVALUATION COMPLETE"
     )
+
+    print(
+        "✓ DAY 1/2/3 METRICS LOGGED TO DAGSHUB MLFLOW"
+    )
+
     print("=" * 70)
 
 

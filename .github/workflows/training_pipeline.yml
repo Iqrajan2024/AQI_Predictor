@@ -236,7 +236,6 @@ jobs:
           fi
 
           echo "OK: No local Feast databases found."
-         
 
       # ============================================================
       # 10. VERIFY FEATURE DATASET
@@ -528,14 +527,29 @@ jobs:
           python - <<'PY'
           import os
           import mlflow
+          from mlflow import MlflowClient
 
-          mlflow.set_tracking_uri(
-              os.environ["MLFLOW_TRACKING_URI"]
-          )
+          tracking_uri = os.environ["MLFLOW_TRACKING_URI"].strip()
 
-          mlflow.set_registry_uri(
-              os.environ["MLFLOW_TRACKING_URI"]
-          )
+          if not tracking_uri:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_URI is empty."
+              )
+
+          if tracking_uri.startswith("sqlite:"):
+              raise SystemExit(
+                  "ERROR: SQLite MLflow is not allowed."
+              )
+
+          if tracking_uri.startswith("file:"):
+              raise SystemExit(
+                  "ERROR: Local file MLflow is not allowed."
+              )
+
+          # IMPORTANT:
+          # Both tracking and registry MUST use DagsHub.
+          mlflow.set_tracking_uri(tracking_uri)
+          mlflow.set_registry_uri(tracking_uri)
 
           print("Tracking URI:")
           print(mlflow.get_tracking_uri())
@@ -544,7 +558,10 @@ jobs:
           print("Registry URI:")
           print(mlflow.get_registry_uri())
 
-          client = mlflow.MlflowClient()
+          client = MlflowClient(
+              tracking_uri=tracking_uri,
+              registry_uri=tracking_uri,
+          )
 
           experiments = client.search_experiments(
               max_results=10
@@ -602,10 +619,55 @@ jobs:
       # 16.5. RUN HISTORICAL 72-HOUR EVALUATION
       # ============================================================
       - name: Evaluate new champion over historical 72-hour horizons
+        env:
+          # --------------------------------------------------------
+          # IMPORTANT:
+          # The evaluation script MUST receive the same DagsHub
+          # MLflow credentials used by training.
+          # --------------------------------------------------------
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+
+          APP_ENV: cloud
+
         run: |
           echo "============================================================"
           echo "RUNNING HISTORICAL 72-HOUR CHAMPION EVALUATION"
           echo "============================================================"
+
+          # --------------------------------------------------------
+          # VERIFY CLOUD MLFLOW BEFORE SPENDING TIME ON EVALUATION
+          # --------------------------------------------------------
+
+          if [ -z "$MLFLOW_TRACKING_URI" ]; then
+            echo "ERROR: MLFLOW_TRACKING_URI is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_USERNAME" ]; then
+            echo "ERROR: MLFLOW_TRACKING_USERNAME is missing."
+            exit 1
+          fi
+
+          if [ -z "$MLFLOW_TRACKING_PASSWORD" ]; then
+            echo "ERROR: MLFLOW_TRACKING_PASSWORD is missing."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == sqlite:* ]]; then
+            echo "ERROR: Evaluation attempted to use local SQLite MLflow."
+            exit 1
+          fi
+
+          if [[ "$MLFLOW_TRACKING_URI" == file:* ]]; then
+            echo "ERROR: Evaluation attempted to use local file MLflow."
+            exit 1
+          fi
+
+          echo
+          echo "DagsHub MLflow URI:"
+          echo "$MLFLOW_TRACKING_URI"
 
           echo
           echo "Champion model:"
@@ -645,7 +707,6 @@ jobs:
 
           python - <<'PY'
           import os
-          import json
           from pathlib import Path
 
           import mlflow
@@ -654,6 +715,10 @@ jobs:
           from sklearn.metrics import r2_score
           from mlflow import MlflowClient
 
+
+          # ========================================================
+          # CONFIGURATION
+          # ========================================================
 
           MODEL_NAME = "Pearls_AQI_XGBoost"
           MODEL_ALIAS = "champion"
@@ -671,55 +736,176 @@ jobs:
           )
 
 
+          # ========================================================
+          # 1. CONFIGURE DAGSHUB MLFLOW
+          # ========================================================
+
+          tracking_uri = os.environ.get(
+              "MLFLOW_TRACKING_URI",
+              ""
+          ).strip()
+
+          username = os.environ.get(
+              "MLFLOW_TRACKING_USERNAME",
+              ""
+          ).strip()
+
+          password = os.environ.get(
+              "MLFLOW_TRACKING_PASSWORD",
+              ""
+          ).strip()
+
+
+          if not tracking_uri:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_URI is empty."
+              )
+
+          if not username:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_USERNAME is empty."
+              )
+
+          if not password:
+              raise SystemExit(
+                  "ERROR: MLFLOW_TRACKING_PASSWORD is empty."
+              )
+
+
           # --------------------------------------------------------
-          # CONFIGURE CLOUD MLFLOW
+          # NEVER allow local MLflow
           # --------------------------------------------------------
 
-          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+          lowered_uri = tracking_uri.lower()
 
-          if tracking_uri.startswith("sqlite:"):
+          if lowered_uri.startswith("sqlite:"):
               raise SystemExit(
                   "ERROR: Evaluation attempted to use SQLite MLflow."
               )
 
-          if tracking_uri.startswith("file:"):
+          if lowered_uri.startswith("file:"):
               raise SystemExit(
                   "ERROR: Evaluation attempted to use local file MLflow."
               )
 
+          if "mlruns" in lowered_uri:
+              raise SystemExit(
+                  "ERROR: Evaluation attempted to use local mlruns storage."
+              )
+
+
+          # --------------------------------------------------------
+          # Configure MLflow authentication
+          # --------------------------------------------------------
+
+          os.environ["MLFLOW_TRACKING_USERNAME"] = username
+          os.environ["MLFLOW_TRACKING_PASSWORD"] = password
+
+
+          # --------------------------------------------------------
+          # IMPORTANT:
+          # Explicitly use the SAME DagsHub URI for BOTH:
+          #
+          # 1. Tracking server
+          # 2. Model registry
+          #
+          # This prevents MLflow from silently creating/using
+          # a local SQLAlchemy/SQLite registry.
+          # --------------------------------------------------------
+
           mlflow.set_tracking_uri(tracking_uri)
           mlflow.set_registry_uri(tracking_uri)
 
-          client = MlflowClient()
 
+          print()
+          print("============================================================")
+          print("DAGSHUB MLFLOW CONFIGURATION")
+          print("============================================================")
 
-          # --------------------------------------------------------
-          # GET CURRENT CHAMPION
-          # --------------------------------------------------------
-
-          champion = client.get_model_version_by_alias(
-              MODEL_NAME,
-              MODEL_ALIAS,
+          print(
+              "Tracking URI:",
+              mlflow.get_tracking_uri()
           )
+
+          print(
+              "Registry URI:",
+              mlflow.get_registry_uri()
+          )
+
+
+          client = MlflowClient(
+              tracking_uri=tracking_uri,
+              registry_uri=tracking_uri,
+          )
+
+
+          # ========================================================
+          # 2. VERIFY REMOTE REGISTERED MODEL
+          # ========================================================
+
+          print()
+          print("============================================================")
+          print("VERIFYING DAGSHUB MODEL REGISTRY")
+          print("============================================================")
+
+          try:
+              registered_model = client.get_registered_model(
+                  MODEL_NAME
+              )
+          except Exception as exc:
+              raise SystemExit(
+                  "ERROR: Registered model "
+                  f"'{MODEL_NAME}' was not found in DagsHub MLflow. "
+                  "The evaluation is not connected to the same "
+                  "MLflow registry used by training."
+              ) from exc
+
+
+          print(
+              "Registered model:",
+              registered_model.name
+          )
+
+
+          # ========================================================
+          # 3. GET CURRENT CHAMPION ALIAS
+          # ========================================================
+
+          try:
+              champion = client.get_model_version_by_alias(
+                  name=MODEL_NAME,
+                  alias=MODEL_ALIAS,
+              )
+          except Exception as exc:
+              raise SystemExit(
+                  "ERROR: Champion alias was not found for "
+                  f"'{MODEL_NAME}' in DagsHub MLflow."
+              ) from exc
+
 
           if not champion.run_id:
               raise SystemExit(
                   "ERROR: Champion model has no MLflow run_id."
               )
 
+
           run_id = champion.run_id
 
+
           print()
-          print("Champion model:")
-          print("  Name:", MODEL_NAME)
-          print("  Version:", champion.version)
-          print("  Alias:", MODEL_ALIAS)
-          print("  Run ID:", run_id)
+          print("============================================================")
+          print("CURRENT DAGSHUB CHAMPION")
+          print("============================================================")
+
+          print("Model:", MODEL_NAME)
+          print("Version:", champion.version)
+          print("Alias:", MODEL_ALIAS)
+          print("Run ID:", run_id)
 
 
-          # --------------------------------------------------------
-          # LOAD EVALUATION DATA
-          # --------------------------------------------------------
+          # ========================================================
+          # 4. LOAD EVALUATION DATA
+          # ========================================================
 
           if not DAILY_FILE.exists():
               raise SystemExit(
@@ -731,8 +917,15 @@ jobs:
                   f"ERROR: Missing forecast file: {FORECAST_FILE}"
               )
 
+          if not SUMMARY_FILE.exists():
+              raise SystemExit(
+                  f"ERROR: Missing evaluation summary: {SUMMARY_FILE}"
+              )
+
+
           daily = pd.read_csv(DAILY_FILE)
           forecasts = pd.read_csv(FORECAST_FILE)
+
 
           if daily.empty:
               raise SystemExit(
@@ -745,9 +938,9 @@ jobs:
               )
 
 
-          # --------------------------------------------------------
-          # VALIDATE REQUIRED FORECAST COLUMNS
-          # --------------------------------------------------------
+          # ========================================================
+          # 5. VALIDATE FORECAST COLUMNS
+          # ========================================================
 
           required_columns = {
               "lead_hour",
@@ -756,7 +949,9 @@ jobs:
               "persistence_aqi",
           }
 
-          missing = required_columns - set(forecasts.columns)
+          missing = required_columns - set(
+              forecasts.columns
+          )
 
           if missing:
               raise SystemExit(
@@ -765,16 +960,18 @@ jobs:
               )
 
 
-          # --------------------------------------------------------
-          # START WITH DAILY METRICS
-          # --------------------------------------------------------
+          # ========================================================
+          # 6. CALCULATE DAY 1 / DAY 2 / DAY 3
+          # ========================================================
 
           metrics_to_log = {}
+
 
           for day in [1, 2, 3]:
 
               start_hour = ((day - 1) * 24) + 1
               end_hour = day * 24
+
 
               subset = forecasts[
                   forecasts["lead_hour"].between(
@@ -783,10 +980,12 @@ jobs:
                   )
               ].copy()
 
+
               if subset.empty:
                   raise SystemExit(
                       f"ERROR: No evaluation rows for Day {day}."
                   )
+
 
               actual = subset["actual_aqi"].astype(float)
               predicted = subset["predicted_aqi"].astype(float)
@@ -805,11 +1004,13 @@ jobs:
                   )
               )
 
+
               day_mae = float(
                   np.mean(
                       np.abs(actual - predicted)
                   )
               )
+
 
               day_r2 = float(
                   r2_score(
@@ -831,11 +1032,13 @@ jobs:
                   )
               )
 
+
               persistence_mae = float(
                   np.mean(
                       np.abs(actual - persistence)
                   )
               )
+
 
               persistence_r2 = float(
                   r2_score(
@@ -846,7 +1049,7 @@ jobs:
 
 
               # ----------------------------------------------------
-              # IMPROVEMENT
+              # IMPROVEMENT VS PERSISTENCE
               # ----------------------------------------------------
 
               if persistence_rmse == 0:
@@ -874,7 +1077,7 @@ jobs:
 
 
               # ----------------------------------------------------
-              # MLflow METRIC NAMES
+              # MLflow NAMES
               # ----------------------------------------------------
 
               metrics_to_log.update({
@@ -924,15 +1127,18 @@ jobs:
               )
 
               print(
-                  f"Persistence RMSE:  {persistence_rmse:.6f}"
+                  f"Persistence RMSE:  "
+                  f"{persistence_rmse:.6f}"
               )
 
               print(
-                  f"Persistence MAE:   {persistence_mae:.6f}"
+                  f"Persistence MAE:   "
+                  f"{persistence_mae:.6f}"
               )
 
               print(
-                  f"Persistence R2:    {persistence_r2:.6f}"
+                  f"Persistence R2:    "
+                  f"{persistence_r2:.6f}"
               )
 
               print(
@@ -946,9 +1152,9 @@ jobs:
               )
 
 
-          # --------------------------------------------------------
-          # OVERALL 72-HOUR METRICS
-          # --------------------------------------------------------
+          # ========================================================
+          # 7. OVERALL 72-HOUR METRICS
+          # ========================================================
 
           actual = forecasts["actual_aqi"].astype(float)
           predicted = forecasts["predicted_aqi"].astype(float)
@@ -963,11 +1169,13 @@ jobs:
               )
           )
 
+
           overall_mae = float(
               np.mean(
                   np.abs(actual - predicted)
               )
           )
+
 
           overall_r2 = float(
               r2_score(
@@ -985,11 +1193,13 @@ jobs:
               )
           )
 
+
           persistence_mae = float(
               np.mean(
                   np.abs(actual - persistence)
               )
           )
+
 
           persistence_r2 = float(
               r2_score(
@@ -999,27 +1209,28 @@ jobs:
           )
 
 
-          overall_rmse_improvement = (
-              (
-                  persistence_rmse
-                  - overall_rmse
-              )
-              / persistence_rmse
-              * 100.0
-              if persistence_rmse != 0
-              else 0.0
-          )
+          if persistence_rmse == 0:
+              overall_rmse_improvement = 0.0
+          else:
+              overall_rmse_improvement = (
+                  (
+                      persistence_rmse
+                      - overall_rmse
+                  )
+                  / persistence_rmse
+              ) * 100.0
 
-          overall_mae_improvement = (
-              (
-                  persistence_mae
-                  - overall_mae
-              )
-              / persistence_mae
-              * 100.0
-              if persistence_mae != 0
-              else 0.0
-          )
+
+          if persistence_mae == 0:
+              overall_mae_improvement = 0.0
+          else:
+              overall_mae_improvement = (
+                  (
+                      persistence_mae
+                      - overall_mae
+                  )
+                  / persistence_mae
+              ) * 100.0
 
 
           metrics_to_log.update({
@@ -1050,21 +1261,37 @@ jobs:
           })
 
 
-          # --------------------------------------------------------
-          # LOG TO THE EXACT WINNING RUN
-          # --------------------------------------------------------
+          # ========================================================
+          # 8. GET EXACT CHAMPION RUN
+          # ========================================================
 
           run = client.get_run(run_id)
 
+
           print()
           print("============================================================")
-          print("LOGGING METRICS")
+          print("LOGGING METRICS TO EXISTING CHAMPION RUN")
           print("============================================================")
 
           print(
               "Existing run metrics:",
               len(run.data.metrics)
           )
+
+
+          # ========================================================
+          # 9. LOG ALL METRICS IN ONE BATCH
+          # ========================================================
+
+          timestamp_ms = int(
+              pd.Timestamp.now(
+                  tz="UTC"
+              ).timestamp() * 1000
+          )
+
+
+          mlflow_metrics = []
+
 
           for name, value in metrics_to_log.items():
 
@@ -1074,30 +1301,32 @@ jobs:
                       f"{name}={value}"
                   )
 
-              client.log_batch(
-                  run_id=run_id,
-                  metrics=[
-                      mlflow.entities.Metric(
-                          key=name,
-                          value=float(value),
-                          timestamp=int(
-                              pd.Timestamp.now(
-                                  tz="UTC"
-                              ).timestamp() * 1000
-                          ),
-                          step=0,
-                      )
-                  ],
-              )
 
-              print(
-                  f"{name} = {value:.6f}"
+              mlflow_metrics.append(
+                  mlflow.entities.Metric(
+                      key=name,
+                      value=float(value),
+                      timestamp=timestamp_ms,
+                      step=0,
+                  )
               )
 
 
-          # --------------------------------------------------------
-          # LOG EVALUATION PARAMETERS
-          # --------------------------------------------------------
+          client.log_batch(
+              run_id=run_id,
+              metrics=mlflow_metrics,
+          )
+
+
+          print(
+              f"Logged {len(mlflow_metrics)} metrics "
+              "to champion run."
+          )
+
+
+          # ========================================================
+          # 10. LOG EVALUATION PARAMETERS
+          # ========================================================
 
           client.log_batch(
               run_id=run_id,
@@ -1106,22 +1335,27 @@ jobs:
                       key="evaluation_type",
                       value="historical_72_hour_recursive",
                   ),
+
                   mlflow.entities.Param(
                       key="evaluation_horizon_hours",
                       value="72",
                   ),
+
                   mlflow.entities.Param(
                       key="evaluation_day_1_hours",
                       value="1-24",
                   ),
+
                   mlflow.entities.Param(
                       key="evaluation_day_2_hours",
                       value="25-48",
                   ),
+
                   mlflow.entities.Param(
                       key="evaluation_day_3_hours",
                       value="49-72",
                   ),
+
                   mlflow.entities.Param(
                       key="persistence_baseline",
                       value="fixed_origin_72_hour",
@@ -1130,35 +1364,34 @@ jobs:
           )
 
 
-          # --------------------------------------------------------
-          # LOG EVALUATION ARTIFACTS
-          # --------------------------------------------------------
+          # ========================================================
+          # 11. LOG EVALUATION ARTIFACTS
+          # ========================================================
 
-          if DAILY_FILE.exists():
-              client.log_artifact(
-                  run_id,
-                  str(DAILY_FILE),
-                  artifact_path="evaluation",
-              )
-
-          if FORECAST_FILE.exists():
-              client.log_artifact(
-                  run_id,
-                  str(FORECAST_FILE),
-                  artifact_path="evaluation",
-              )
-
-          if SUMMARY_FILE.exists():
-              client.log_artifact(
-                  run_id,
-                  str(SUMMARY_FILE),
-                  artifact_path="evaluation",
-              )
+          client.log_artifact(
+              run_id,
+              str(DAILY_FILE),
+              artifact_path="evaluation",
+          )
 
 
-          # --------------------------------------------------------
-          # TAG THE CHAMPION VERSION
-          # --------------------------------------------------------
+          client.log_artifact(
+              run_id,
+              str(FORECAST_FILE),
+              artifact_path="evaluation",
+          )
+
+
+          client.log_artifact(
+              run_id,
+              str(SUMMARY_FILE),
+              artifact_path="evaluation",
+          )
+
+
+          # ========================================================
+          # 12. TAG CHAMPION VERSION
+          # ========================================================
 
           client.set_model_version_tag(
               MODEL_NAME,
@@ -1167,12 +1400,14 @@ jobs:
               "PASSED",
           )
 
+
           client.set_model_version_tag(
               MODEL_NAME,
               str(champion.version),
               "evaluation_type",
               "historical_72_hour_recursive",
           )
+
 
           client.set_model_version_tag(
               MODEL_NAME,
@@ -1181,12 +1416,14 @@ jobs:
               str(metrics_to_log["day1_rmse"]),
           )
 
+
           client.set_model_version_tag(
               MODEL_NAME,
               str(champion.version),
               "day2_rmse",
               str(metrics_to_log["day2_rmse"]),
           )
+
 
           client.set_model_version_tag(
               MODEL_NAME,
@@ -1196,38 +1433,56 @@ jobs:
           )
 
 
-          # --------------------------------------------------------
-          # VERIFY METRICS AFTER WRITING
-          # --------------------------------------------------------
+          # ========================================================
+          # 13. RE-READ FROM DAGSHUB AND VERIFY
+          # ========================================================
 
           verified_run = client.get_run(run_id)
+
           verified_metrics = verified_run.data.metrics
 
 
           required_metrics = [
+
+              # Day 1
               "day1_rmse",
               "day1_mae",
               "day1_r2",
               "day1_persistence_rmse",
+              "day1_persistence_mae",
+              "day1_persistence_r2",
               "day1_rmse_improvement_vs_persistence_pct",
+              "day1_mae_improvement_vs_persistence_pct",
 
+              # Day 2
               "day2_rmse",
               "day2_mae",
               "day2_r2",
               "day2_persistence_rmse",
+              "day2_persistence_mae",
+              "day2_persistence_r2",
               "day2_rmse_improvement_vs_persistence_pct",
+              "day2_mae_improvement_vs_persistence_pct",
 
+              # Day 3
               "day3_rmse",
               "day3_mae",
               "day3_r2",
               "day3_persistence_rmse",
+              "day3_persistence_mae",
+              "day3_persistence_r2",
               "day3_rmse_improvement_vs_persistence_pct",
+              "day3_mae_improvement_vs_persistence_pct",
 
+              # Overall
               "72h_rmse",
               "72h_mae",
               "72h_r2",
               "72h_persistence_rmse",
+              "72h_persistence_mae",
+              "72h_persistence_r2",
               "72h_rmse_improvement_vs_persistence_pct",
+              "72h_mae_improvement_vs_persistence_pct",
           ]
 
 
@@ -1241,65 +1496,144 @@ jobs:
           if missing_metrics:
               raise SystemExit(
                   "ERROR: Metrics were not successfully "
-                  "stored in champion run: "
+                  "stored in DagsHub champion run: "
                   + ", ".join(missing_metrics)
               )
 
 
-          print()
-          print("============================================================")
-          print("72-HOUR MLflow EVALUATION PASSED")
-          print("============================================================")
-
-          print(
-              "Model:",
-              MODEL_NAME
-          )
-
-          print(
-              "Champion version:",
-              champion.version
-          )
-
-          print(
-              "Champion run:",
-              run_id
-          )
+          # ========================================================
+          # 14. PRINT VERIFIED METRICS
+          # ========================================================
 
           print()
-          print("Day 1 RMSE:",
-                verified_metrics["day1_rmse"])
+          print("============================================================")
+          print("DAGSHUB MLflow 72-HOUR EVALUATION PASSED")
+          print("============================================================")
 
-          print("Day 2 RMSE:",
-                verified_metrics["day2_rmse"])
+          print()
+          print("Model:", MODEL_NAME)
+          print("Champion version:", champion.version)
+          print("Champion alias:", MODEL_ALIAS)
+          print("Champion run:", run_id)
 
-          print("Day 3 RMSE:",
-                verified_metrics["day3_rmse"])
+
+          for day in [1, 2, 3]:
+
+              print()
+              print(f"DAY {day}")
+
+              print(
+                  "  RMSE:",
+                  verified_metrics[
+                      f"day{day}_rmse"
+                  ]
+              )
+
+              print(
+                  "  MAE:",
+                  verified_metrics[
+                      f"day{day}_mae"
+                  ]
+              )
+
+              print(
+                  "  R2:",
+                  verified_metrics[
+                      f"day{day}_r2"
+                  ]
+              )
+
+              print(
+                  "  Persistence RMSE:",
+                  verified_metrics[
+                      f"day{day}_persistence_rmse"
+                  ]
+              )
+
+              print(
+                  "  Persistence MAE:",
+                  verified_metrics[
+                      f"day{day}_persistence_mae"
+                  ]
+              )
+
+              print(
+                  "  Persistence R2:",
+                  verified_metrics[
+                      f"day{day}_persistence_r2"
+                  ]
+              )
+
+              print(
+                  "  RMSE Improvement:",
+                  verified_metrics[
+                      f"day{day}_rmse_improvement_vs_persistence_pct"
+                  ]
+              )
+
+              print(
+                  "  MAE Improvement:",
+                  verified_metrics[
+                      f"day{day}_mae_improvement_vs_persistence_pct"
+                  ]
+              )
+
+
+          print()
+          print("72-HOUR OVERALL")
 
           print(
-              "72h RMSE:",
+              "  RMSE:",
               verified_metrics["72h_rmse"]
           )
 
           print(
-              "72h Persistence RMSE:",
-              verified_metrics[
-                  "72h_persistence_rmse"
-              ]
+              "  MAE:",
+              verified_metrics["72h_mae"]
           )
 
           print(
-              "72h Improvement:",
+              "  R2:",
+              verified_metrics["72h_r2"]
+          )
+
+          print(
+              "  Persistence RMSE:",
+              verified_metrics["72h_persistence_rmse"]
+          )
+
+          print(
+              "  Persistence MAE:",
+              verified_metrics["72h_persistence_mae"]
+          )
+
+          print(
+              "  Persistence R2:",
+              verified_metrics["72h_persistence_r2"]
+          )
+
+          print(
+              "  RMSE Improvement:",
               verified_metrics[
                   "72h_rmse_improvement_vs_persistence_pct"
               ]
           )
 
+          print(
+              "  MAE Improvement:",
+              verified_metrics[
+                  "72h_mae_improvement_vs_persistence_pct"
+              ]
+          )
+
+
           print()
           print(
-              "ALL DAILY + PERSISTENCE + IMPROVEMENT "
-              "METRICS STORED IN CHAMPION RUN."
+              "ALL DAY 1 + DAY 2 + DAY 3 + "
+              "PERSISTENCE + IMPROVEMENT METRICS "
+              "ARE STORED IN THE DAGSHUB CHAMPION RUN."
           )
+
           print("============================================================")
           PY
 
@@ -1339,7 +1673,10 @@ jobs:
           mlflow.set_tracking_uri(tracking_uri)
           mlflow.set_registry_uri(tracking_uri)
 
-          client = MlflowClient()
+          client = MlflowClient(
+              tracking_uri=tracking_uri,
+              registry_uri=tracking_uri,
+          )
 
           print("Tracking URI:")
           print(mlflow.get_tracking_uri())
@@ -1448,12 +1785,6 @@ jobs:
           # --------------------------------------------------------
           # COPY METRICS TO MODEL VERSION TAGS
           # --------------------------------------------------------
-          #
-          # This makes the champion metrics directly visible on the
-          # registered model version in DagsHub MLflow.
-          #
-          # The authoritative metrics remain on the source MLflow run.
-          # --------------------------------------------------------
 
           for metric_name, metric_value in found_metrics.items():
               client.set_model_version_tag(
@@ -1540,15 +1871,20 @@ jobs:
           MODEL_NAME = "Pearls_AQI_XGBoost"
           ALIAS = "champion"
 
+          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+
           mlflow.set_tracking_uri(
-              os.environ["MLFLOW_TRACKING_URI"]
+              tracking_uri
           )
 
           mlflow.set_registry_uri(
-              os.environ["MLFLOW_TRACKING_URI"]
+              tracking_uri
           )
 
-          client = MlflowClient()
+          client = MlflowClient(
+              tracking_uri=tracking_uri,
+              registry_uri=tracking_uri,
+          )
 
           champion = client.get_model_version_by_alias(
               MODEL_NAME,
@@ -1918,11 +2254,10 @@ jobs:
 
           echo
           echo "FastAPI Cloud deployment command completed."
-          
+
       # ============================================================
       # 24. VERIFY ONLINE FASTAPI FORECAST
       # ============================================================
- 
       - name: Verify online FastAPI forecast
         env:
           FASTAPI_BASE_URL: "https://pearls-aqi-predictor-3aece6f2.fastapicloud.dev"
@@ -1940,10 +2275,6 @@ jobs:
 
           print(f"FastAPI URL: {BASE_URL}")
           print()
-
-          # --------------------------------------------------------
-          # Wait for FastAPI Cloud instance to become reachable
-          # --------------------------------------------------------
 
           print("Waiting for FastAPI Cloud instance...")
 
@@ -1965,23 +2296,28 @@ jobs:
                       print("/health: OK")
                       break
 
-                  print("Health endpoint returned:", response.text[:500])
+                  print(
+                      "Health endpoint returned:",
+                      response.text[:500]
+                  )
 
               except requests.exceptions.RequestException as exc:
-                  print("Health check failed:", type(exc).__name__, str(exc))
+                  print(
+                      "Health check failed:",
+                      type(exc).__name__,
+                      str(exc)
+                  )
 
               if attempt < 6:
-                  print("Waiting 15 seconds before retry...")
+                  print(
+                      "Waiting 15 seconds before retry..."
+                  )
                   time.sleep(15)
 
           if not health_ok:
               raise SystemExit(
                   "ERROR: FastAPI Cloud /health did not become ready."
               )
-
-          # --------------------------------------------------------
-          # Forecast endpoint
-          # --------------------------------------------------------
 
           print()
           print("Checking /forecast...")
@@ -2090,6 +2426,9 @@ jobs:
           echo "us_aqi: excluded from model inputs"
           echo "target_aqi: training target only"
           echo "Champion: cloud MLflow alias"
+          echo "Evaluation: Day 1 + Day 2 + Day 3"
+          echo "Persistence baseline: fixed-origin 72-hour"
+          echo "Evaluation metrics: stored in champion MLflow run"
           echo "Forecast: 72 hourly predictions"
           echo "Daily forecast: 3 calendar days"
           echo "Forecast artifacts: uploaded"
