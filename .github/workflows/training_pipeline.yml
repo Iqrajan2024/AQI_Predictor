@@ -599,6 +599,711 @@ jobs:
           python src/models/train.py
 
       # ============================================================
+      # 16.5. RUN HISTORICAL 72-HOUR EVALUATION
+      # ============================================================
+      - name: Evaluate new champion over historical 72-hour horizons
+        run: |
+          echo "============================================================"
+          echo "RUNNING HISTORICAL 72-HOUR CHAMPION EVALUATION"
+          echo "============================================================"
+
+          echo
+          echo "Champion model:"
+          ls -lh models/champion_model.pkl
+
+          echo
+          echo "Running recursive 72-hour evaluation..."
+
+          python src/evaluation/evaluate_72h.py
+
+          echo
+          echo "Evaluation completed."
+
+          echo
+          echo "Evaluation files:"
+          find data/evaluation -maxdepth 1 -type f -print
+
+          test -f data/evaluation/historical_72h_forecasts.csv
+          test -f data/evaluation/historical_72h_daily_metrics.csv
+          test -f data/evaluation/historical_72h_summary.json
+
+          echo
+          echo "72-hour evaluation artifacts verified."
+
+      # ============================================================
+      # 16.6. LOG DAILY + PERSISTENCE METRICS TO CHAMPION RUN
+      # ============================================================
+      - name: Log 72-hour evaluation metrics to champion MLflow run
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: |
+          echo "============================================================"
+          echo "LOGGING 72-HOUR EVALUATION METRICS TO CHAMPION RUN"
+          echo "============================================================"
+
+          python - <<'PY'
+          import os
+          import json
+          from pathlib import Path
+
+          import mlflow
+          import numpy as np
+          import pandas as pd
+          from sklearn.metrics import r2_score
+          from mlflow import MlflowClient
+
+
+          MODEL_NAME = "Pearls_AQI_XGBoost"
+          MODEL_ALIAS = "champion"
+
+          DAILY_FILE = Path(
+              "data/evaluation/historical_72h_daily_metrics.csv"
+          )
+
+          FORECAST_FILE = Path(
+              "data/evaluation/historical_72h_forecasts.csv"
+          )
+
+          SUMMARY_FILE = Path(
+              "data/evaluation/historical_72h_summary.json"
+          )
+
+
+          # --------------------------------------------------------
+          # CONFIGURE CLOUD MLFLOW
+          # --------------------------------------------------------
+
+          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
+
+          if tracking_uri.startswith("sqlite:"):
+              raise SystemExit(
+                  "ERROR: Evaluation attempted to use SQLite MLflow."
+              )
+
+          if tracking_uri.startswith("file:"):
+              raise SystemExit(
+                  "ERROR: Evaluation attempted to use local file MLflow."
+              )
+
+          mlflow.set_tracking_uri(tracking_uri)
+          mlflow.set_registry_uri(tracking_uri)
+
+          client = MlflowClient()
+
+
+          # --------------------------------------------------------
+          # GET CURRENT CHAMPION
+          # --------------------------------------------------------
+
+          champion = client.get_model_version_by_alias(
+              MODEL_NAME,
+              MODEL_ALIAS,
+          )
+
+          if not champion.run_id:
+              raise SystemExit(
+                  "ERROR: Champion model has no MLflow run_id."
+              )
+
+          run_id = champion.run_id
+
+          print()
+          print("Champion model:")
+          print("  Name:", MODEL_NAME)
+          print("  Version:", champion.version)
+          print("  Alias:", MODEL_ALIAS)
+          print("  Run ID:", run_id)
+
+
+          # --------------------------------------------------------
+          # LOAD EVALUATION DATA
+          # --------------------------------------------------------
+
+          if not DAILY_FILE.exists():
+              raise SystemExit(
+                  f"ERROR: Missing evaluation file: {DAILY_FILE}"
+              )
+
+          if not FORECAST_FILE.exists():
+              raise SystemExit(
+                  f"ERROR: Missing forecast file: {FORECAST_FILE}"
+              )
+
+          daily = pd.read_csv(DAILY_FILE)
+          forecasts = pd.read_csv(FORECAST_FILE)
+
+          if daily.empty:
+              raise SystemExit(
+                  "ERROR: Daily evaluation file is empty."
+              )
+
+          if forecasts.empty:
+              raise SystemExit(
+                  "ERROR: Historical forecast file is empty."
+              )
+
+
+          # --------------------------------------------------------
+          # VALIDATE REQUIRED FORECAST COLUMNS
+          # --------------------------------------------------------
+
+          required_columns = {
+              "lead_hour",
+              "actual_aqi",
+              "predicted_aqi",
+              "persistence_aqi",
+          }
+
+          missing = required_columns - set(forecasts.columns)
+
+          if missing:
+              raise SystemExit(
+                  "ERROR: Historical forecast file is missing: "
+                  + ", ".join(sorted(missing))
+              )
+
+
+          # --------------------------------------------------------
+          # START WITH DAILY METRICS
+          # --------------------------------------------------------
+
+          metrics_to_log = {}
+
+          for day in [1, 2, 3]:
+
+              start_hour = ((day - 1) * 24) + 1
+              end_hour = day * 24
+
+              subset = forecasts[
+                  forecasts["lead_hour"].between(
+                      start_hour,
+                      end_hour
+                  )
+              ].copy()
+
+              if subset.empty:
+                  raise SystemExit(
+                      f"ERROR: No evaluation rows for Day {day}."
+                  )
+
+              actual = subset["actual_aqi"].astype(float)
+              predicted = subset["predicted_aqi"].astype(float)
+              persistence = subset["persistence_aqi"].astype(float)
+
+
+              # ----------------------------------------------------
+              # MODEL METRICS
+              # ----------------------------------------------------
+
+              day_rmse = float(
+                  np.sqrt(
+                      np.mean(
+                          (actual - predicted) ** 2
+                      )
+                  )
+              )
+
+              day_mae = float(
+                  np.mean(
+                      np.abs(actual - predicted)
+                  )
+              )
+
+              day_r2 = float(
+                  r2_score(
+                      actual,
+                      predicted
+                  )
+              )
+
+
+              # ----------------------------------------------------
+              # PERSISTENCE METRICS
+              # ----------------------------------------------------
+
+              persistence_rmse = float(
+                  np.sqrt(
+                      np.mean(
+                          (actual - persistence) ** 2
+                      )
+                  )
+              )
+
+              persistence_mae = float(
+                  np.mean(
+                      np.abs(actual - persistence)
+                  )
+              )
+
+              persistence_r2 = float(
+                  r2_score(
+                      actual,
+                      persistence
+                  )
+              )
+
+
+              # ----------------------------------------------------
+              # IMPROVEMENT
+              # ----------------------------------------------------
+
+              if persistence_rmse == 0:
+                  rmse_improvement = 0.0
+              else:
+                  rmse_improvement = (
+                      (
+                          persistence_rmse
+                          - day_rmse
+                      )
+                      / persistence_rmse
+                  ) * 100.0
+
+
+              if persistence_mae == 0:
+                  mae_improvement = 0.0
+              else:
+                  mae_improvement = (
+                      (
+                          persistence_mae
+                          - day_mae
+                      )
+                      / persistence_mae
+                  ) * 100.0
+
+
+              # ----------------------------------------------------
+              # MLflow METRIC NAMES
+              # ----------------------------------------------------
+
+              metrics_to_log.update({
+
+                  f"day{day}_rmse":
+                      day_rmse,
+
+                  f"day{day}_mae":
+                      day_mae,
+
+                  f"day{day}_r2":
+                      day_r2,
+
+                  f"day{day}_persistence_rmse":
+                      persistence_rmse,
+
+                  f"day{day}_persistence_mae":
+                      persistence_mae,
+
+                  f"day{day}_persistence_r2":
+                      persistence_r2,
+
+                  f"day{day}_rmse_improvement_vs_persistence_pct":
+                      rmse_improvement,
+
+                  f"day{day}_mae_improvement_vs_persistence_pct":
+                      mae_improvement,
+              })
+
+
+              print()
+              print(
+                  f"================ DAY {day} "
+                  f"({start_hour}-{end_hour}) ================"
+              )
+
+              print(
+                  f"Model RMSE:        {day_rmse:.6f}"
+              )
+
+              print(
+                  f"Model MAE:         {day_mae:.6f}"
+              )
+
+              print(
+                  f"Model R2:          {day_r2:.6f}"
+              )
+
+              print(
+                  f"Persistence RMSE:  {persistence_rmse:.6f}"
+              )
+
+              print(
+                  f"Persistence MAE:   {persistence_mae:.6f}"
+              )
+
+              print(
+                  f"Persistence R2:    {persistence_r2:.6f}"
+              )
+
+              print(
+                  f"RMSE Improvement:  "
+                  f"{rmse_improvement:.2f}%"
+              )
+
+              print(
+                  f"MAE Improvement:   "
+                  f"{mae_improvement:.2f}%"
+              )
+
+
+          # --------------------------------------------------------
+          # OVERALL 72-HOUR METRICS
+          # --------------------------------------------------------
+
+          actual = forecasts["actual_aqi"].astype(float)
+          predicted = forecasts["predicted_aqi"].astype(float)
+          persistence = forecasts["persistence_aqi"].astype(float)
+
+
+          overall_rmse = float(
+              np.sqrt(
+                  np.mean(
+                      (actual - predicted) ** 2
+                  )
+              )
+          )
+
+          overall_mae = float(
+              np.mean(
+                  np.abs(actual - predicted)
+              )
+          )
+
+          overall_r2 = float(
+              r2_score(
+                  actual,
+                  predicted
+              )
+          )
+
+
+          persistence_rmse = float(
+              np.sqrt(
+                  np.mean(
+                      (actual - persistence) ** 2
+                  )
+              )
+          )
+
+          persistence_mae = float(
+              np.mean(
+                  np.abs(actual - persistence)
+              )
+          )
+
+          persistence_r2 = float(
+              r2_score(
+                  actual,
+                  persistence
+              )
+          )
+
+
+          overall_rmse_improvement = (
+              (
+                  persistence_rmse
+                  - overall_rmse
+              )
+              / persistence_rmse
+              * 100.0
+              if persistence_rmse != 0
+              else 0.0
+          )
+
+          overall_mae_improvement = (
+              (
+                  persistence_mae
+                  - overall_mae
+              )
+              / persistence_mae
+              * 100.0
+              if persistence_mae != 0
+              else 0.0
+          )
+
+
+          metrics_to_log.update({
+
+              "72h_rmse":
+                  overall_rmse,
+
+              "72h_mae":
+                  overall_mae,
+
+              "72h_r2":
+                  overall_r2,
+
+              "72h_persistence_rmse":
+                  persistence_rmse,
+
+              "72h_persistence_mae":
+                  persistence_mae,
+
+              "72h_persistence_r2":
+                  persistence_r2,
+
+              "72h_rmse_improvement_vs_persistence_pct":
+                  overall_rmse_improvement,
+
+              "72h_mae_improvement_vs_persistence_pct":
+                  overall_mae_improvement,
+          })
+
+
+          # --------------------------------------------------------
+          # LOG TO THE EXACT WINNING RUN
+          # --------------------------------------------------------
+
+          run = client.get_run(run_id)
+
+          print()
+          print("============================================================")
+          print("LOGGING METRICS")
+          print("============================================================")
+
+          print(
+              "Existing run metrics:",
+              len(run.data.metrics)
+          )
+
+          for name, value in metrics_to_log.items():
+
+              if not np.isfinite(value):
+                  raise SystemExit(
+                      f"ERROR: Non-finite metric: "
+                      f"{name}={value}"
+                  )
+
+              client.log_batch(
+                  run_id=run_id,
+                  metrics=[
+                      mlflow.entities.Metric(
+                          key=name,
+                          value=float(value),
+                          timestamp=int(
+                              pd.Timestamp.now(
+                                  tz="UTC"
+                              ).timestamp() * 1000
+                          ),
+                          step=0,
+                      )
+                  ],
+              )
+
+              print(
+                  f"{name} = {value:.6f}"
+              )
+
+
+          # --------------------------------------------------------
+          # LOG EVALUATION PARAMETERS
+          # --------------------------------------------------------
+
+          client.log_batch(
+              run_id=run_id,
+              params=[
+                  mlflow.entities.Param(
+                      key="evaluation_type",
+                      value="historical_72_hour_recursive",
+                  ),
+                  mlflow.entities.Param(
+                      key="evaluation_horizon_hours",
+                      value="72",
+                  ),
+                  mlflow.entities.Param(
+                      key="evaluation_day_1_hours",
+                      value="1-24",
+                  ),
+                  mlflow.entities.Param(
+                      key="evaluation_day_2_hours",
+                      value="25-48",
+                  ),
+                  mlflow.entities.Param(
+                      key="evaluation_day_3_hours",
+                      value="49-72",
+                  ),
+                  mlflow.entities.Param(
+                      key="persistence_baseline",
+                      value="fixed_origin_72_hour",
+                  ),
+              ],
+          )
+
+
+          # --------------------------------------------------------
+          # LOG EVALUATION ARTIFACTS
+          # --------------------------------------------------------
+
+          if DAILY_FILE.exists():
+              client.log_artifact(
+                  run_id,
+                  str(DAILY_FILE),
+                  artifact_path="evaluation",
+              )
+
+          if FORECAST_FILE.exists():
+              client.log_artifact(
+                  run_id,
+                  str(FORECAST_FILE),
+                  artifact_path="evaluation",
+              )
+
+          if SUMMARY_FILE.exists():
+              client.log_artifact(
+                  run_id,
+                  str(SUMMARY_FILE),
+                  artifact_path="evaluation",
+              )
+
+
+          # --------------------------------------------------------
+          # TAG THE CHAMPION VERSION
+          # --------------------------------------------------------
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "evaluation_status",
+              "PASSED",
+          )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "evaluation_type",
+              "historical_72_hour_recursive",
+          )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "day1_rmse",
+              str(metrics_to_log["day1_rmse"]),
+          )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "day2_rmse",
+              str(metrics_to_log["day2_rmse"]),
+          )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "day3_rmse",
+              str(metrics_to_log["day3_rmse"]),
+          )
+
+
+          # --------------------------------------------------------
+          # VERIFY METRICS AFTER WRITING
+          # --------------------------------------------------------
+
+          verified_run = client.get_run(run_id)
+          verified_metrics = verified_run.data.metrics
+
+
+          required_metrics = [
+              "day1_rmse",
+              "day1_mae",
+              "day1_r2",
+              "day1_persistence_rmse",
+              "day1_rmse_improvement_vs_persistence_pct",
+
+              "day2_rmse",
+              "day2_mae",
+              "day2_r2",
+              "day2_persistence_rmse",
+              "day2_rmse_improvement_vs_persistence_pct",
+
+              "day3_rmse",
+              "day3_mae",
+              "day3_r2",
+              "day3_persistence_rmse",
+              "day3_rmse_improvement_vs_persistence_pct",
+
+              "72h_rmse",
+              "72h_mae",
+              "72h_r2",
+              "72h_persistence_rmse",
+              "72h_rmse_improvement_vs_persistence_pct",
+          ]
+
+
+          missing_metrics = [
+              name
+              for name in required_metrics
+              if name not in verified_metrics
+          ]
+
+
+          if missing_metrics:
+              raise SystemExit(
+                  "ERROR: Metrics were not successfully "
+                  "stored in champion run: "
+                  + ", ".join(missing_metrics)
+              )
+
+
+          print()
+          print("============================================================")
+          print("72-HOUR MLflow EVALUATION PASSED")
+          print("============================================================")
+
+          print(
+              "Model:",
+              MODEL_NAME
+          )
+
+          print(
+              "Champion version:",
+              champion.version
+          )
+
+          print(
+              "Champion run:",
+              run_id
+          )
+
+          print()
+          print("Day 1 RMSE:",
+                verified_metrics["day1_rmse"])
+
+          print("Day 2 RMSE:",
+                verified_metrics["day2_rmse"])
+
+          print("Day 3 RMSE:",
+                verified_metrics["day3_rmse"])
+
+          print(
+              "72h RMSE:",
+              verified_metrics["72h_rmse"]
+          )
+
+          print(
+              "72h Persistence RMSE:",
+              verified_metrics[
+                  "72h_persistence_rmse"
+              ]
+          )
+
+          print(
+              "72h Improvement:",
+              verified_metrics[
+                  "72h_rmse_improvement_vs_persistence_pct"
+              ]
+          )
+
+          print()
+          print(
+              "ALL DAILY + PERSISTENCE + IMPROVEMENT "
+              "METRICS STORED IN CHAMPION RUN."
+          )
+          print("============================================================")
+          PY
+
+      # ============================================================
       # 17. VERIFY CHAMPION MODEL + CHAMPION METRICS IN DAGSHUB
       # ============================================================
       - name: Verify champion model and metrics
@@ -1150,6 +1855,20 @@ jobs:
             data/predictions/latest_forecast_features.csv
           if-no-files-found: error
           retention-days: 7
+
+      # ============================================================
+      # 22.5. UPLOAD 72-HOUR EVALUATION ARTIFACTS
+      # ============================================================
+      - name: Upload 72-hour evaluation artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: aqi-72h-evaluation
+          path: |
+            data/evaluation/historical_72h_forecasts.csv
+            data/evaluation/historical_72h_daily_metrics.csv
+            data/evaluation/historical_72h_summary.json
+          if-no-files-found: error
+          retention-days: 30
 
       # ============================================================
       # 23. DEPLOY TO FASTAPI CLOUD
