@@ -35,47 +35,31 @@ The prediction target is the **next-hour AQI**, and 72-hour forecasts are genera
 
 ## Implementation Steps
 
-The project follows this pipeline:
+The project follows an end-to-end automated ML pipeline:
 
-1. **Collect Data**
-
-   * Historical and recent weather and air-quality data are collected from Open-Meteo.
-   * Data is maintained for Peshawar.
+1. **Data Collection & EDA**
+   - Historical and current weather and air-quality data are collected from Open-Meteo and explored for trends, distributions, missing values, and correlations.
 
 2. **Feature Engineering**
-
-   * Weather, pollutant, AQI lag, rolling average, and time-based features are generated.
-   * The final model uses 70 features.
+   - Weather, pollutant, time-based, lag, rolling-average, and AQI-change features are generated, resulting in **70 model features**.
 
 3. **Feature Store**
-
-   * Features are managed using Feast for consistent training and prediction data.
+   - Feast manages and serves features consistently for training and prediction.
 
 4. **Model Training**
+   - **Ridge Regression, Random Forest, and XGBoost** are trained using chronological train/validation/test splits.
 
-   * Ridge Regression
-   * Random Forest
-   * XGBoost
+5. **Model Evaluation & Baseline Comparison**
+   - Models are evaluated using **RMSE, MAE, and R²** and compared with a **persistence baseline**. XGBoost is selected as the best-performing model.
 
+6. **Model Registration**
+   - The selected XGBoost model is registered in **MLflow** and promoted as the **champion** model.
 
-5. **Model Evaluation**
+7. **72-Hour Forecasting**
+   - The champion model generates recursive hourly AQI predictions for the next **72 hours (3 days)**.
 
-   * Models are evaluated using RMSE, MAE, and R².
-   * The best-performing model is XGBoost. 
-
-6. **Forecasting**
-
-   * The champion model generates recursive 72-hour AQI predictions.
-
-7. **Explainability**
-
-   * SHAP is used to explain the factors influencing predictions.
-
-8. **Deployment**
-
-   * FastAPI provides prediction APIs.
-   * Streamlit provides the user dashboard.
-   * GitHub Actions automates feature processing and model training.
+8. **Explainability & Deployment**
+   - **SHAP** explains model predictions, while **FastAPI** serves predictions, **Streamlit** provides the dashboard, and **GitHub Actions** automates the pipeline.
 
 ---
 
@@ -265,6 +249,19 @@ The dashboard will open in your browser.
 
 ---
 
+### Automated Forecast Update Disclaimer
+
+The AQI prediction system uses an automated GitHub Actions pipeline that is scheduled to run daily at **12:00 PM Pakistan Standard Time (PKT)**. The complete pipeline takes approximately **34 minutes** because it performs data collection, feature processing, Feast materialization, model training, historical evaluation, MLflow metric logging, forecast generation, artifact updates, and API deployment.
+
+However, the scheduled start time is **not guaranteed to occur exactly at 12:00 PM**. GitHub Actions may delay scheduled workflow execution due to runner availability, platform load, scheduling behavior, or other service-side constraints.
+
+As a result, the latest forecast may occasionally **not be available immediately at 12:00 PM**. Users should therefore consider the displayed forecast timestamp/update time when interpreting the results. Once the scheduled workflow completes successfully, the dashboard and API are updated with the latest available forecast.
+
+This is a limitation of the **cloud automation and deployment infrastructure**, rather than an indication that the AQI prediction model has stopped working.
+
+---
+
+
 ## Future Improvements
 
 * Support AQI forecasting for multiple cities.
@@ -282,10 +279,3 @@ Pearls AQI Predictor is an end-to-end machine learning and MLOps system for AQI 
 The deployed system provides a practical interface for monitoring current air quality and forecasting AQI for the next 72 hours.
 
 
-### Live Demo
-
- https://aqi-predictor-axaefuyojztztpjgazhdcq.streamlit.app/
-
-### Repository
-
- https://github.com/Iqrajan2024/AQI_Predictor
