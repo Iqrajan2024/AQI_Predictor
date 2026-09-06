@@ -1782,7 +1782,7 @@ jobs:
                   "ERROR: Champion run is missing 'model_name' parameter."
               )
 
-          if model_name.lower() != "XGBoost":
+          if model_name.strip().lower() != "xgboost":
               raise SystemExit(
                   f"ERROR: Expected XGBoost champion, got {model_name}"
               )
