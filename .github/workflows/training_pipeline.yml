@@ -1772,14 +1772,19 @@ jobs:
           # VERIFY MODEL TYPE
           # --------------------------------------------------------
 
-          model_type = params.get("model_type")
+          model_name = params.get("model_name")
 
           print()
-          print("Champion model type:", model_type)
+          print("Champion model:", model_name)
 
-          if model_type != "XGBoost":
+          if model_name is None:
               raise SystemExit(
-                  f"ERROR: Expected XGBoost champion, got {model_type}"
+                  "ERROR: Champion run is missing 'model_name' parameter."
+              )
+
+          if model_name.lower() != "XGBoost":
+              raise SystemExit(
+                  f"ERROR: Expected XGBoost champion, got {model_name}"
               )
 
           # --------------------------------------------------------
