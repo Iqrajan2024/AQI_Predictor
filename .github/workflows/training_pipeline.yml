@@ -1,13 +1,12 @@
 name: Pearls AQI - Daily Training Pipeline
 
 on:
-  workflow_dispatch:
+  schedule:
+    # 12:00 AM Pakistan Standard Time (PKT, UTC+5)
+    # = 7:00 PM UTC on the previous day
+    - cron: "0 19 * * *"
 
-  workflow_run:
-    workflows:
-      - "AQI Feature Pipeline"
-    types:
-      - completed
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -16,12 +15,6 @@ permissions:
 jobs:
 
   train:
-    if: >
-      github.event_name == 'workflow_dispatch' ||
-      (
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'schedule'
-      )
 
     runs-on: ubuntu-latest
 
