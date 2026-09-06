@@ -599,33 +599,27 @@ jobs:
           python src/models/train.py
 
       # ============================================================
-      # 17. VERIFY CHAMPION MODEL IN CLOUD MLFLOW
+      # 17. VERIFY CHAMPION MODEL + CHAMPION METRICS IN DAGSHUB
       # ============================================================
-      - name: Verify champion model
+      - name: Verify champion model and metrics
         env:
           MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
           MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
           MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
         run: |
           echo "============================================================"
-          echo "VERIFYING CHAMPION MODEL"
+          echo "VERIFYING CHAMPION MODEL + METRICS IN DAGSHUB MLFLOW"
           echo "============================================================"
 
           python - <<'PY'
           import os
           import mlflow
+          from mlflow import MlflowClient
 
           MODEL_NAME = "Pearls_AQI_XGBoost"
           MODEL_ALIAS = "champion"
 
-          tracking_uri = os.environ.get(
-              "MLFLOW_TRACKING_URI"
-          )
-
-          if not tracking_uri:
-              raise SystemExit(
-                  "ERROR: MLFLOW_TRACKING_URI is missing."
-              )
+          tracking_uri = os.environ["MLFLOW_TRACKING_URI"]
 
           if tracking_uri.startswith("sqlite:"):
               raise SystemExit(
@@ -640,7 +634,7 @@ jobs:
           mlflow.set_tracking_uri(tracking_uri)
           mlflow.set_registry_uri(tracking_uri)
 
-          client = mlflow.MlflowClient()
+          client = MlflowClient()
 
           print("Tracking URI:")
           print(mlflow.get_tracking_uri())
@@ -649,36 +643,235 @@ jobs:
           print("Registry URI:")
           print(mlflow.get_registry_uri())
 
+          # --------------------------------------------------------
+          # GET CURRENT CHAMPION
+          # --------------------------------------------------------
+
           try:
-              model_version = client.get_model_version_by_alias(
+              champion = client.get_model_version_by_alias(
                   MODEL_NAME,
                   MODEL_ALIAS,
               )
           except Exception as exc:
               raise SystemExit(
-                  "ERROR: Champion model alias not found "
-                  "in cloud MLflow."
+                  "ERROR: Champion alias was not found in DagsHub MLflow."
               ) from exc
 
-          print()
-          print("Champion model:")
-          print(f"Name: {model_version.name}")
-          print(f"Version: {model_version.version}")
-          print(f"Run ID: {model_version.run_id}")
-          print(f"Alias: {MODEL_ALIAS}")
-
-          if model_version.name != MODEL_NAME:
+          if not champion.run_id:
               raise SystemExit(
-                  "ERROR: Incorrect registered model."
-              )
-
-          if model_version.run_id is None:
-              raise SystemExit(
-                  "ERROR: Champion model has no run ID."
+                  "ERROR: Champion model version has no run_id."
               )
 
           print()
-          print("Champion model verification PASSED.")
+          print("============================================================")
+          print("CHAMPION MODEL")
+          print("============================================================")
+          print("Model:", champion.name)
+          print("Version:", champion.version)
+          print("Alias:", MODEL_ALIAS)
+          print("Run ID:", champion.run_id)
+
+          # --------------------------------------------------------
+          # GET THE RUN THAT PRODUCED THE CHAMPION
+          # --------------------------------------------------------
+
+          run = client.get_run(champion.run_id)
+
+          metrics = run.data.metrics
+          params = run.data.params
+
+          print()
+          print("============================================================")
+          print("CHAMPION METRICS")
+          print("============================================================")
+
+          required_metrics = [
+              "validation_rmse",
+              "validation_mae",
+              "validation_r2",
+              "test_rmse",
+              "test_mae",
+              "test_r2",
+          ]
+
+          found_metrics = {}
+
+          for metric_name in required_metrics:
+              if metric_name in metrics:
+                  found_metrics[metric_name] = metrics[metric_name]
+                  print(
+                      f"{metric_name}: "
+                      f"{metrics[metric_name]:.6f}"
+                  )
+
+          # --------------------------------------------------------
+          # REQUIRE CORE METRICS
+          # --------------------------------------------------------
+
+          required_core_metrics = [
+              "validation_rmse",
+              "validation_mae",
+              "validation_r2",
+          ]
+
+          missing = [
+              name
+              for name in required_core_metrics
+              if name not in metrics
+          ]
+
+          if missing:
+              raise SystemExit(
+                  "ERROR: Champion run is missing required metrics: "
+                  + ", ".join(missing)
+              )
+
+          # --------------------------------------------------------
+          # VERIFY MODEL TYPE
+          # --------------------------------------------------------
+
+          model_type = params.get("model_type")
+
+          print()
+          print("Champion model type:", model_type)
+
+          if model_type != "XGBoost":
+              raise SystemExit(
+                  f"ERROR: Expected XGBoost champion, got {model_type}"
+              )
+
+          # --------------------------------------------------------
+          # COPY METRICS TO MODEL VERSION TAGS
+          # --------------------------------------------------------
+          #
+          # This makes the champion metrics directly visible on the
+          # registered model version in DagsHub MLflow.
+          #
+          # The authoritative metrics remain on the source MLflow run.
+          # --------------------------------------------------------
+
+          for metric_name, metric_value in found_metrics.items():
+              client.set_model_version_tag(
+                  MODEL_NAME,
+                  str(champion.version),
+                  metric_name,
+                  str(metric_value),
+              )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "champion_run_id",
+              champion.run_id,
+          )
+
+          client.set_model_version_tag(
+              MODEL_NAME,
+              str(champion.version),
+              "champion_status",
+              "champion",
+          )
+
+          print()
+          print("Champion model version tags updated.")
+
+          # --------------------------------------------------------
+          # RE-READ CHAMPION TO VERIFY TAGS
+          # --------------------------------------------------------
+
+          verified = client.get_model_version(
+              MODEL_NAME,
+              str(champion.version),
+          )
+
+          print()
+          print("============================================================")
+          print("REGISTERED CHAMPION METRICS")
+          print("============================================================")
+
+          for metric_name in required_core_metrics:
+              value = verified.tags.get(metric_name)
+
+              if value is None:
+                  raise SystemExit(
+                      f"ERROR: Metric tag '{metric_name}' "
+                      "was not registered on champion."
+                  )
+
+              print(f"{metric_name}: {value}")
+
+          print()
+          print("============================================================")
+          print("CHAMPION + METRICS VERIFICATION PASSED")
+          print("============================================================")
+          print("Model:", MODEL_NAME)
+          print("Version:", champion.version)
+          print("Alias:", MODEL_ALIAS)
+          print("Run ID:", champion.run_id)
+          print("Validation RMSE:", metrics["validation_rmse"])
+          print("Validation MAE:", metrics["validation_mae"])
+          print("Validation R2:", metrics["validation_r2"])
+          print("============================================================")
+          PY
+
+      # ============================================================
+      # 17.5. PRINT LATEST CHAMPION METRICS
+      # ============================================================
+      - name: Print latest champion metrics
+        env:
+          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          MLFLOW_TRACKING_USERNAME: ${{ secrets.MLFLOW_TRACKING_USERNAME }}
+          MLFLOW_TRACKING_PASSWORD: ${{ secrets.MLFLOW_TRACKING_PASSWORD }}
+        run: |
+          echo "============================================================"
+          echo "LATEST DAGSHUB CHAMPION METRICS"
+          echo "============================================================"
+
+          python - <<'PY'
+          import os
+          import mlflow
+          from mlflow import MlflowClient
+
+          MODEL_NAME = "Pearls_AQI_XGBoost"
+          ALIAS = "champion"
+
+          mlflow.set_tracking_uri(
+              os.environ["MLFLOW_TRACKING_URI"]
+          )
+
+          mlflow.set_registry_uri(
+              os.environ["MLFLOW_TRACKING_URI"]
+          )
+
+          client = MlflowClient()
+
+          champion = client.get_model_version_by_alias(
+              MODEL_NAME,
+              ALIAS,
+          )
+
+          run = client.get_run(
+              champion.run_id
+          )
+
+          print()
+          print("MODEL:", champion.name)
+          print("VERSION:", champion.version)
+          print("ALIAS:", ALIAS)
+          print("RUN ID:", champion.run_id)
+
+          print()
+          print("METRICS:")
+
+          for key, value in sorted(
+              run.data.metrics.items()
+          ):
+              print(
+                  f"{key} = {value}"
+              )
+
+          print()
+          print("LATEST CHAMPION METRICS VERIFIED FROM DAGSHUB")
           PY
 
       # ============================================================
