@@ -83,11 +83,12 @@ The project follows this pipeline:
 
 | Category            | Technologies           |
 | ------------------- | ---------------------- |
-| Language            | Python 3.13            |
+| Programming Language| Python 3.13            |
+| IDE                 | VS Code                |
 | ML                  | Scikit-learn, Tensorflow|
 | Data Processing     | Pandas, NumPy          |
 | Feature Store       | Feast                  |
-| Experiment Tracking | MLflow                 |
+| Model Tracking      | MLflow                 |
 | Explainability      | SHAP                   |
 | Backend             | FastAPI, Uvicorn       |
 | Dashboard           | Streamlit              |
@@ -106,7 +107,7 @@ Generates hourly AQI predictions for the next three days using recursive forecas
 
 ### Multiple ML Models
 
-Compares Ridge Regression, Random Forest, BiLSTM, and XGBoost to identify the best-performing model.
+Compares Ridge Regression, Random Forest, and XGBoost to identify the best-performing model.
 
 ### Champion Model
 
@@ -149,10 +150,6 @@ AQI_Predictor/
 │       ├── ci.yml
 │       ├── feature_pipeline.yml
 │       └── training_pipeline.yml
-│
-├── data/
-│   ├── evaluation/
-│   └── predictions/
 │
 ├── feature_repo/
 │   └── feature_repo/
