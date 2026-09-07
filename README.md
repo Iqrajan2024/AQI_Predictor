@@ -251,11 +251,11 @@ The dashboard will open in your browser.
 
 ### Automated Forecast Update Disclaimer
 
-The AQI prediction system uses an automated GitHub Actions pipeline that is scheduled to run daily at **12:00 PM Pakistan Standard Time (PKT)**. The complete pipeline takes approximately **34 minutes** because it performs data collection, feature processing, Feast materialization, model training, historical evaluation, MLflow metric logging, forecast generation, artifact updates, and API deployment.
+The AQI prediction system uses an automated GitHub Actions pipeline that is scheduled to run daily at **12:00 AM Pakistan Standard Time (PKT)**. The complete pipeline takes approximately **34 minutes** because it performs data collection, feature processing, Feast materialization, model training, historical evaluation, MLflow metric logging, forecast generation, artifact updates, and API deployment.
 
-However, the scheduled start time is **not guaranteed to occur exactly at 12:00 PM**. GitHub Actions may delay scheduled workflow execution due to runner availability, platform load, scheduling behavior, or other service-side constraints.
+However, the scheduled start time is **not guaranteed to occur exactly at 12:00 AM**. GitHub Actions may delay scheduled workflow execution due to runner availability, platform load, scheduling behavior, or other service-side constraints.
 
-As a result, the latest forecast may occasionally **not be available immediately at 12:00 PM**. Users should therefore consider the displayed forecast timestamp/update time when interpreting the results. Once the scheduled workflow completes successfully, the dashboard and API are updated with the latest available forecast.
+As a result, the latest forecast may occasionally **not be available immediately at 12:00 AM**. Users should therefore consider the displayed forecast timestamp/update time when interpreting the results. Once the scheduled workflow completes successfully, the dashboard and API are updated with the latest available forecast.
 
 This is a limitation of the **cloud automation and deployment infrastructure**, rather than an indication that the AQI prediction model has stopped working.
 
